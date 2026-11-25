@@ -4,6 +4,8 @@
 
 Record offline battles in **World of Tanks EU 2.3.1.2 (Windows x64)** with **OffHangar 2.0 LAN**. The mod saves each battle as a `.wotreplay` that opens in the game's built-in replay player. Install the same client and mod on the playback PC to see the battle log, radio commands, consumables and other recorded HUD details.
 
+![Tank at the start of a battle with allied vehicle markers, the aiming reticle, and the minimap](docs/screenshots/battle-start.png)
+
 ## How it works
 
 1. **Recording the battle.** When recording is on, the mod periodically samples vehicle positions, turret angles and the player's camera. It also records changes such as shots, hits and shell selections with the time elapsed since the battle began. In player-view mode, it tracks only the vehicles visible to the player at the time.
