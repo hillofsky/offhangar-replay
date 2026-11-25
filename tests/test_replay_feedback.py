@@ -11,6 +11,18 @@ from fleet_export import append_extra, append_periods
 
 
 class ReplayFeedbackTest(unittest.TestCase):
+    def test_damage_stickers_keep_the_exact_hit_and_restore_on_reentry(self):
+        mark = (0, 0xdeadbeef12345678, 384032)
+        encoded = struct.pack('<IQI', *mark)
+        extras = [(7., b'K', [100, [mark]]), (8., b'K', [100, []]),
+                  (12., b'K', [100, [mark]]), (13., b'K', [999, [mark]])]
+        packets = []
+        append_extra(packets, extras, {100: 18}, [(4., [])], 4., 100, 7)
+        states = [(t, struct.unpack_from('<III', b), b[12:]) for k, t, b in packets if k == 7]
+        self.assertEqual(states, [(3., (18, 33, 17), b'\x01' + encoded),
+                                  (4., (18, 33, 1), b'\x00'),
+                                  (8., (18, 33, 17), b'\x01' + encoded)])
+
     def test_completed_battle_keeps_winner_and_reason(self):
         for team in (0, 1, 2):
             with self.subTest(team=team):

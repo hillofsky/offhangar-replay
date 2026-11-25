@@ -70,7 +70,7 @@ def load_track(path, extras=None):
                 roster[vehicle['id']] = vehicle
             elif kind == b'F':
                 frames.append((struct.unpack_from('<f', data)[0], list(FRAME.iter_unpack(data[4:]))))
-            elif extras is not None and kind in (b'C', b'X', b'A', b'P', b'R', b'O', b'L', b'S', b'I', b'U', b'D'):
+            elif extras is not None and kind in (b'C', b'X', b'A', b'P', b'R', b'O', b'L', b'S', b'I', b'U', b'D', b'K'):
                 if kind == b'A':
                     stamp = struct.unpack_from('<f', data)[0]
                     extras.append((stamp, kind, list(struct.iter_unpack('<IH',data[4:]))))
@@ -364,6 +364,11 @@ def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
             name = b'oh2Fleet.spotted'
             payload = pickle.dumps(tuple(args), protocol=2)
             packets.append((0x31, t, U32.pack(len(name))+name+U32.pack(len(payload))+payload))
+        elif kind == b'K':
+            key, marks = args
+            if key in slots:
+                payload = bw_array(marks, lambda p: struct.pack('<IQI', *p))
+                packets.append((7, t, message(slots[key], 33, payload)))
         elif kind == b'A':
             for key,angle in args:
                 if key in slots:

@@ -42,6 +42,7 @@ By default, the mod records only vehicles visible to the player. To record all v
 - Fallen trees and columns, broken props, and destroyed building sections. Starting with v1.0.5, the recorder saves the object identity, destruction time, and fall direction so the client can apply the effect on the map.
 - Seconds remaining in the prebattle message. Standard allied and enemy overhead markers show tank tiers by default.
 - Recorded player shot results drive the client's own penetration, non-penetration and ricochet audio. Older replays use a generic hit confirmation for recorded non-lethal shell damage to an enemy.
+- Starting with v1.0.6, new recordings preserve hit marks on vehicle armor, including penetrations. Marks appear, change and disappear as they did in battle. Earlier recordings lack this decal history.
 - Hull auto-rotation, cruise control, player vehicle fires, and kill and critical hit feedback.
 - The winner or draw and finish reason when OffHangar resolves a battle. The native client uses the result to select the ending music. Leaving early produces no result.
 - Current hit points and the health bar on the lower-left vehicle panel.

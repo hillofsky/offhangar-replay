@@ -102,6 +102,7 @@ class Track(object):
         self.frames = 0
         self.errors = set()
         self.angles = {}
+        self.sticker_states = {}
         self.period = None
         self.outcome_recorded = False
         self.file = open(self.path + '.part', 'wb')
@@ -232,6 +233,14 @@ class Track(object):
                 self.recorded_destruction.add(key)
         self.pending_destruction.clear()
 
+    def record_stickers(self, vehicle, now, entering=False):
+        marks = tuple((p['networkID'], p['segment'], p['params']) for p in vehicle.damageStickers)
+        if entering or marks != self.sticker_states.get(vehicle.id, ()):
+            # Match the frame timestamp so a newly visible vehicle exists before the update.
+            stamp = struct.unpack('<f', struct.pack('<f', now - self.start))[0]
+            self.write(b'K', _json_bytes([stamp, vehicle.id, marks]))
+        self.sticker_states[vehicle.id] = marks
+
     def sample(self):
         self.flush_destruction()
         from gui.mods.offhangar2 import battle, bots, turret
@@ -272,6 +281,8 @@ class Track(object):
                 p = v.position
                 rows.append(POSE.pack(key, p.x, p.y, p.z, v.yaw, v.pitch, v.roll, v.health))
                 active.add(key)
+                if key not in self.active:
+                    self.record_stickers(v, now, entering=True)
                 aiming = player.gunRotator if key == own else turret._targets.get(key)
                 packed = int(v.gunAnglesPacked)
                 if aiming is not None:
@@ -427,6 +438,23 @@ def init():
     from gui.mods.offhangar2 import shooting
     from gui import InputHandler
     import Avatar, Vehicle
+    sticker_setter = Vehicle.Vehicle.set_damageStickers
+
+    @wraps(sticker_setter)
+    def stickers_changed(vehicle, *args, **kwargs):
+        result = sticker_setter(vehicle, *args, **kwargs)
+        track = _track
+        if track is not None and vehicle.id in track.active:
+            try:
+                if not track.player_view or track.visible(BigWorld.player(), vehicle.id):
+                    track.record_stickers(vehicle, BigWorld.time())
+            except Exception:
+                if 'damageStickers' not in track.errors:
+                    track.errors.add('damageStickers')
+                    LOG.exception('Recording vehicle damage stickers')
+        return result
+
+    Vehicle.Vehicle.set_damageStickers = stickers_changed
     from AreaDestructibles import DestructiblesManager
     native_destroy = DestructiblesManager.orderDestructibleDestroy
 
