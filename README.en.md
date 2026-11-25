@@ -4,6 +4,12 @@
 
 Record offline battles in **World of Tanks EU 2.3.1.2 (Windows x64)** with **OffHangar 2.0 LAN**. The mod saves each battle as a `.wotreplay` that opens in the game's built-in replay player. Install the same client and mod on the playback PC to see the battle log, radio commands, consumables and other recorded HUD details.
 
+## How it works
+
+1. **Recording the battle.** When recording is on, the mod periodically samples vehicle positions, turret angles and the player's camera. It also records changes such as shots, hits and shell selections with the time elapsed since the battle began. In player-view mode, it tracks only the vehicles visible to the player at the time.
+2. **Creating the replay file.** When the battle ends, the mod finishes writing the `.ohtrack` file in `replays\offhangar` and starts `export.exe`. The converter uses `bootstrap.dat` to initialize the replay, then writes the recorded map, vehicle roster and timed events into a `.wotreplay` file. This all happens on your PC.
+3. **Playing it back.** When you open the file, the game engine renders the battle from the recorded positions and events. The mod updates the HUD on the same timeline. For example, when playback reaches a shell change, the HUD selects the corresponding slot and shows how many rounds of that type remain.
+
 ## Installation
 
 1. Download `offhangar-replay-2.3.1.2-win64.zip` from the [latest release](https://github.com/hillofsky/offhangar-replay/releases/latest) and extract it into its own folder.
@@ -38,9 +44,7 @@ By default, the mod records only vehicles visible to the player. To record all v
 ## Compatibility and troubleshooting
 
 - The supported base mod is `mods\2.3.1.2\offhangar2_lan_2312.wotmod`. Install the game and OffHangar 2.0 LAN first.
-- Older replays can show damage when both the HP change and the attacker were recorded. Accurate ammunition, consumable and assisted-damage history requires a recording that captured those events.
-- One short Prokhorovka test replay containing only allied vehicles caused the client to exit during loading. The cause is unknown.
-- A `.ohtrack` file is the recording before conversion. If conversion fails after a battle, look in `replays\offhangar` for a file ending in `.export-error.txt`.
+- If conversion fails, open the file ending in `.export-error.txt` in `replays\offhangar` for details.
 - Replays and privately supplied templates can contain player names and battle identifiers. When reporting an issue, start with the client version, map, recording mode and replay timestamp.
 
 ## Build from source
