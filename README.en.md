@@ -37,6 +37,7 @@ By default, the mod records only vehicles visible to the player. To record all v
 ### What gets recorded
 
 - The countdown once the vehicle is ready, and the remaining battle time.
+- Current hit points and the health bar on the lower-left vehicle panel.
 - Vehicle movement and orientation, turret and gun movement, shots, hits, vehicle destruction, the player's camera and sniper view.
 - Aiming circle, reload state, Sixth Sense, radio commands and the outline of the vehicle under the reticle.
 - Rounds remaining by shell type, rounds in the magazine, current and next shell selections, consumable quantities and cooldowns.

@@ -14,6 +14,7 @@ from account_helpers.settings_core.settings_constants import DAMAGE_LOG
 from constants import ATTACK_REASON, ATTACK_REASON_INDICES, VEHICLE_SETTING
 from gui.mods import mod_oh2_fleet as fleet
 from gui.Scaleform.daapi.view.battle.shared.crosshair import plugins
+from gui.battle_control.battle_constants import VEHICLE_VIEW_STATE
 
 LOG = logging.getLogger('oh2.fleet.status')
 EVENTS = (BATTLE_EVENT_TYPE.RECEIVED_DAMAGE, BATTLE_EVENT_TYPE.TANKING, BATTLE_EVENT_TYPE.RECEIVED_CRIT,
@@ -232,12 +233,21 @@ def init():
     BattleReplay.g_replayCtrl.setDataCallback('oh2Fleet.incoming', playback_incoming)
     health = Vehicle.Vehicle.onHealthChanged
     @wraps(health)
-    def changed(vehicle, *args, **kwargs):
+    def changed(vehicle, newHealth, *args, **kwargs):
         try:
-            legacy_hit(vehicle, *args, **kwargs)
+            legacy_hit(vehicle, newHealth, *args, **kwargs)
         except Exception:
             LOG.exception('Restoring historic incoming damage')
-        return health(vehicle, *args, **kwargs)
+        result = health(vehicle, newHealth, *args, **kwargs)
+        replay = BattleReplay.g_replayCtrl
+        if replay.isPlaying and (replay.arenaInfo or {}).get('oh2Fleet'):
+            player = BigWorld.player()
+            if vehicle.id == player.playerVehicleID:
+                # The vehicle packet updates the entity. The driver's damage panel
+                # normally receives a separate health notification from the avatar.
+                player.guiSessionProvider.invalidateVehicleState(
+                    VEHICLE_VIEW_STATE.HEALTH, max(0, newHealth), vehicle.id)
+        return result
     Vehicle.Vehicle.onHealthChanged = changed
     start, stop = plugins.AmmoPlugin.start, plugins.AmmoPlugin.stop
     @wraps(start)
