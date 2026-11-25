@@ -95,12 +95,14 @@ class ReplayFeedbackTest(unittest.TestCase):
     def test_damage_stickers_keep_the_exact_hit_and_restore_on_reentry(self):
         mark = (0, 0xdeadbeef12345678, 384032)
         encoded = struct.pack('<IQI', *mark)
-        extras = [(7., b'K', [100, [mark]]), (8., b'K', [100, []]),
+        signed_mark = (0, -1779, 348227)
+        signed_bytes = struct.pack('<IqI', *signed_mark)
+        extras = [(7., b'K', [100, [mark, signed_mark]]), (8., b'K', [100, []]),
                   (12., b'K', [100, [mark]]), (13., b'K', [999, [mark]])]
         packets = []
         append_extra(packets, extras, {100: 18}, [(4., [])], 4., 100, 7)
         states = [(t, struct.unpack_from('<III', b), b[12:]) for k, t, b in packets if k == 7]
-        self.assertEqual(states, [(3., (18, 33, 17), b'\x01' + encoded),
+        self.assertEqual(states, [(3., (18, 33, 33), b'\x02' + encoded + signed_bytes),
                                   (4., (18, 33, 1), b'\x00'),
                                   (8., (18, 33, 17), b'\x01' + encoded)])
 

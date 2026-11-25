@@ -180,6 +180,11 @@ def message(entity, index, data):
     return struct.pack('<III',entity,index,len(data)) + data
 
 
+def pack_hit_point(network_id, segment, params):
+    # The client can expose the packed fields as signed integers.
+    return struct.pack('<IQI', network_id & 0xffffffff, segment & 0xffffffffffffffff, params & 0xffffffff)
+
+
 def combat_packets(name, entity, args, slots, avatar):
     mapped = lambda key: slots.get(key, 0)
     slot = mapped(entity)
@@ -205,8 +210,7 @@ def combat_packets(name, entity, args, slots, avatar):
     elif slot and name == 'showDamageFromShot':
         who,points,fx,pref,damage,factor,shield,speed,gun = args
         def point(p):
-            return struct.pack('<IQI',p['networkID'] & 0xffffffff,p['segment'] & 0xffffffffffffffff,
-                               p['params'] & 0xffffffff)
+            return pack_hit_point(p['networkID'], p['segment'], p['params'])
         data = U32.pack(mapped(who)) + bw_array(points,point)
         yield 8,message(slot,10,data + struct.pack('<BBiBBfB',fx&255,pref&255,damage,int(factor)&255,
                                                    bool(shield),speed,gun&255))
@@ -391,7 +395,7 @@ def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
         elif kind == b'K':
             key, marks = args
             if key in slots:
-                payload = bw_array(marks, lambda p: struct.pack('<IQI', *p))
+                payload = bw_array(marks, lambda p: pack_hit_point(*p))
                 packets.append((7, t, message(slots[key], 33, payload)))
         elif kind == b'A':
             for key,angle in args:
