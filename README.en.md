@@ -52,6 +52,8 @@ By default, the mod records only vehicles visible to the player. To record all v
 - Aiming circle, reload state, Sixth Sense, radio commands and the outline of the vehicle under the reticle.
 - Rounds remaining by shell type, rounds in the magazine, current and next shell selections, consumable quantities and cooldowns.
 - The lower-left battle log and its totals. The original HUD shows damage dealt, assisted, blocked and received, as well as damage to modules and crew.
+- Center-screen battle ribbons retain the type, amount, vehicle name and cumulative updates shown during the battle. Ramming damage received and dealt appears on separate red and green ribbons. Older recordings use the battle events they contain.
+- The minimap replays allied positions and the top panel tracks vehicle deaths. Rebuilding an older `.ohtrack` can recover observed positions and wrecks. Vehicles omitted from its roster cannot be identified.
 
 ## Compatibility and troubleshooting
 

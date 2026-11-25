@@ -11,6 +11,42 @@ from fleet_export import append_extra, append_periods
 
 
 class ReplayFeedbackTest(unittest.TestCase):
+    def test_ribbon_updates_and_feedback_target_types(self):
+        rows = [[0, 100, 1, 0, True], [15, 100, 1, 0, False], [20, 0, 12, 0, False],
+                [14, 200, 5, 12], [7, 100, 27, 17]]
+        ribbon = ['receivedRam', 73, '30', 'Kilana', 'AT-SPG', '', -1, '']
+        extras = [(1., b'I', ['events', rows]), (2., b'I', ['ribbon', 0, ribbon]),
+                  (3., b'I', ['ribbon', 1, ribbon])]
+        packets = []
+        append_extra(packets, extras, {100: 7}, [(1., [])], 1., 100, 17)
+        callbacks = []
+        for kind, stamp, data in packets:
+            if kind == 0x31:
+                size, = struct.unpack_from('<I', data)
+                callbacks.append((data[4:4+size], pickle.loads(data[8+size:])))
+        self.assertEqual(json.loads(callbacks[0][1][0])[1],
+                         [[0, 7, 1, 0], [15, 100, 1, 0], [20, 0, 12, 0],
+                          [14, 200, 5, 12], [7, 7, 27, 17]])
+        self.assertEqual(callbacks[1:], [(b'oh2Fleet.ribbon', (i, ribbon)) for i in (0, 1)])
+
+    def test_reappearing_wreck_and_allied_minimap(self):
+        from fleet_export import battlefield_updates
+        def pose(key, x, hp):
+            return (key, x, 2., 3., 0., 0., 0., hp)
+        roster = {k: {'team': t} for k, t in [(1, 1), (2, 1), (3, 2), (4, 1)]}
+        frames = [(1., [pose(1, 1, 100), pose(2, 20, 90), pose(3, 90, 50)]),
+                  (2., [pose(1, 2, 100), pose(4, 0, 0)]),
+                  (3., [pose(1, 3, 100), pose(2, 25, 0), pose(3, 80, 0)])]
+        extras = [(2.8,b'X',['onHealthChanged', 3, [0, 50, 1, 2, 0]]),
+                  (2.9,b'J',[3, 1, 0, 2, 0])]
+        updates = battlefield_updates(roster, frames, extras, 1)
+        self.assertEqual([(t, a[0]) for t,k,a in updates if k == b'J'], [(2., 4), (3., 2)])
+        self.assertEqual([(t, a) for t,k,a in updates if k == b'M'],
+                         [(1., [[2, 20, 3]]), (2., []), (3., [])])
+        # Native public positions also cover allies outside the recorded 3D scene.
+        self.assertFalse(any(k == b'M' for _,k,_ in battlefield_updates(
+            roster, frames, extras + [(1., b'M', [[2, 44, 53]])], 1)))
+
     def test_public_kill_and_base_events_reach_the_native_arena(self):
         slots = {100: 7, 200: 9}
         extras = [(4., b'B', [8, 2, 1, 27, 73, 1, False]),

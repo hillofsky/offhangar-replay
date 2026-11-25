@@ -10,7 +10,9 @@ import BattleReplay
 import BigWorld
 import Vehicle
 from BattleFeedbackCommon import BATTLE_EVENT_TYPE
-from account_helpers.settings_core.settings_constants import DAMAGE_LOG, DAMAGE_INDICATOR
+from account_helpers.settings_core.settings_constants import BATTLE_EVENTS, DAMAGE_LOG, DAMAGE_INDICATOR
+from account_helpers.settings_core.SettingsCore import SettingsCore
+from gui.Scaleform.daapi.view.battle.shared.ribbons_panel import BattleRibbonsPanel
 from constants import ATTACK_REASON, ATTACK_REASON_INDICES, VEHICLE_SETTING
 from gui.mods import mod_oh2_fleet as fleet
 from gui.Scaleform.daapi.view.battle.shared.crosshair import plugins
@@ -18,10 +20,10 @@ from gui.battle_control.battle_constants import VEHICLE_VIEW_STATE
 from gui.battle_control.controllers.vehicle_state_ctrl import VehicleStateController
 
 LOG = logging.getLogger('oh2.fleet.status')
-EVENTS = (BATTLE_EVENT_TYPE.RECEIVED_DAMAGE, BATTLE_EVENT_TYPE.TANKING, BATTLE_EVENT_TYPE.RECEIVED_CRIT,
-          BATTLE_EVENT_TYPE.DAMAGE, BATTLE_EVENT_TYPE.RADIO_ASSIST, BATTLE_EVENT_TYPE.TRACK_ASSIST,
-          BATTLE_EVENT_TYPE.STUN_ASSIST, BATTLE_EVENT_TYPE.DESTRUCTIBLE_DAMAGED,
-          BATTLE_EVENT_TYPE.KILL, BATTLE_EVENT_TYPE.CRIT)
+EVENTS = BATTLE_EVENT_TYPE.ALL
+RIBBON_SETTINGS = set(BattleRibbonsPanel.getBattleEventsSettingsToBattleEfficiencyTypes())
+RIBBON_SETTINGS.update((BATTLE_EVENTS.SHOW_IN_BATTLE, BATTLE_EVENTS.EVENT_NAME, BATTLE_EVENTS.VEHICLE_INFO))
+ribbon_panel = None
 ShotResult = namedtuple('ShotResult', 'vehicleID hitFlags gunInstallationIndex')
 DRIVER_STATES = (VEHICLE_VIEW_STATE.AUTO_ROTATION, VEHICLE_VIEW_STATE.CRUISE_MODE, VEHICLE_VIEW_STATE.FIRE)
 LOG_SETTINGS = (DAMAGE_LOG.SHOW_DETAILS, DAMAGE_LOG.EVENT_POSITIONS, DAMAGE_LOG.SHOW_EVENT_TYPES,
@@ -71,8 +73,8 @@ def events(player, events):
     for e in events:
         kind = e['eventType']
         if kind in EVENTS:
-            target = e['targetID'] if kind == BATTLE_EVENT_TYPE.DESTRUCTIBLE_DAMAGED else visible_id(player, e['targetID'])
-            rows.append([kind, target, e['count'], e['details']])
+            target = e['targetID']
+            rows.append([kind, target, e['count'], e['details'], target in player.arena.vehicles])
     if rows:
         record(b'I', ['events', rows])
 
@@ -255,7 +257,71 @@ class Loadout(object):
             self.timer = None
 
 
+def install_ribbons():
+    original_setting = SettingsCore.getSetting
+    @wraps(original_setting)
+    def ribbon_setting(core, key):
+        replay = BattleReplay.g_replayCtrl
+        if key in RIBBON_SETTINGS and replay and replay.isPlaying:
+            data = (replay.arenaInfo or {}).get('oh2Fleet')
+            if data:
+                return data.get('ribbonSettings', {}).get(key, True)
+        return original_setting(core, key)
+    SettingsCore.getSetting = ribbon_setting
+
+    # Some native ribbons originate in vehicle state or perk callbacks instead of onBattleEvents.
+    # Keep the formatted calls that the player actually saw, including aggregated updates.
+    methods = (BattleRibbonsPanel.as_addBattleEfficiencyEventS, BattleRibbonsPanel.as_updateBattleEfficiencyEventS)
+    def observe(index):
+        native = methods[index]
+        @wraps(native)
+        def show(panel, *args):
+            replay = BattleReplay.g_replayCtrl
+            if replay.isPlaying and (replay.arenaInfo or {}).get('oh2Fleet', {}).get('recordedRibbons'):
+                return
+            result = native(panel, *args)
+            if fleet._track is not None and panel._isDAAPIInited():
+                record(b'I', ['ribbon', index, list(args)])
+            return result
+        return show
+    BattleRibbonsPanel.as_addBattleEfficiencyEventS = observe(0)
+    BattleRibbonsPanel.as_updateBattleEfficiencyEventS = observe(1)
+    populate, dispose, hide = BattleRibbonsPanel._populate, BattleRibbonsPanel._dispose, BattleRibbonsPanel.onHide
+    @wraps(populate)
+    def opened(panel):
+        global ribbon_panel
+        result = populate(panel)
+        panel._fleetRibbons = set()
+        ribbon_panel = panel
+        return result
+    @wraps(dispose)
+    def closed(panel):
+        global ribbon_panel
+        if ribbon_panel is panel:
+            ribbon_panel = None
+        return dispose(panel)
+    @wraps(hide)
+    def hidden(panel, key):
+        if hasattr(panel, '_fleetRibbons'):
+            panel._fleetRibbons.discard(key)
+        return hide(panel, key)
+    BattleRibbonsPanel._populate, BattleRibbonsPanel._dispose, BattleRibbonsPanel.onHide = opened, closed, hidden
+    def play(index, args):
+        panel = ribbon_panel
+        replay = BattleReplay.g_replayCtrl
+        if not panel or not replay.isPlaying or not (replay.arenaInfo or {}).get('oh2Fleet', {}).get('recordedRibbons'):
+            return
+        if replay.isTimeWarpInProgress:
+            panel._fleetRibbons.clear()
+            return
+        key = args[1]
+        methods[1 if index and key in panel._fleetRibbons else 0](panel, *args)
+        panel._fleetRibbons.add(key)
+    BattleReplay.g_replayCtrl.setDataCallback('oh2Fleet.ribbon', play)
+
+
 def init():
+    install_ribbons()
     new_track = fleet.Track.__init__
     @wraps(new_track)
     def begin(track, *args, **kwargs):
@@ -267,6 +333,8 @@ def init():
         try:
             core = dependency.instance(ISettingsCore)
             settings = dict((key, core.getSetting(key)) for key in LOG_SETTINGS)
+            ribbon_settings = dict((key, core.getSetting(key)) for key in RIBBON_SETTINGS)
+            track.write(b'I', fleet._json_bytes([0., 'start', 'ribbons', ribbon_settings]))
         except Exception:
             LOG.warning('Could not read damage log settings', exc_info=True)
         track.write(b'I', fleet._json_bytes([0., 'start', 'history', settings]))

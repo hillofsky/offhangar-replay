@@ -70,7 +70,7 @@ def load_track(path, extras=None):
                 roster[vehicle['id']] = vehicle
             elif kind == b'F':
                 frames.append((struct.unpack_from('<f', data)[0], list(FRAME.iter_unpack(data[4:]))))
-            elif extras is not None and kind in (b'C', b'X', b'A', b'P', b'R', b'O', b'L', b'S', b'I', b'U', b'D', b'K', b'B', b'J', b'T'):
+            elif extras is not None and kind in (b'C', b'X', b'A', b'P', b'R', b'O', b'L', b'S', b'I', b'U', b'D', b'K', b'B', b'J', b'T', b'M'):
                 if kind == b'A':
                     stamp = struct.unpack_from('<f', data)[0]
                     extras.append((stamp, kind, list(struct.iter_unpack('<IH',data[4:]))))
@@ -343,6 +343,10 @@ def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
             name = ('client_vehicle_state_%d' % state).encode('ascii')
             payload = pickle.dumps((state, value, 0), protocol=2)
             packets.append((0x31, t, U32.pack(len(name))+name+U32.pack(len(payload))+payload))
+        elif kind == b'I' and args[0] == 'ribbon':
+            name = b'oh2Fleet.ribbon'
+            payload = pickle.dumps(tuple(args[1:]), protocol=2)
+            packets.append((0x31,t,U32.pack(len(name))+name+U32.pack(len(payload))+payload))
         elif kind == b'I' and args[0] != 'start':
             if args[0] == 'hit':
                 _, yaw, attacker, damage, crits, blocked, he, reason = args
@@ -352,9 +356,14 @@ def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
                 if not row[1]:
                     continue
             elif args[0] == 'events':
-                # DESTRUCTIBLE_DAMAGED (14) identifies a map object, not a vehicle.
-                row = ['events', [[event, target if event == 14 else slots.get(target, 0), count, details]
-                                  for event, target, count, details in args[1]]]
+                events = []
+                for event, target, count, details, *vehicle_ref in args[1]:
+                    # Older tracks used vehicle IDs for all supported events except map-object damage.
+                    is_vehicle = vehicle_ref[0] if vehicle_ref else event != 14
+                    if is_vehicle:
+                        target = slots.get(target, 0)
+                    events.append([event, target, count, details])
+                row = ['events', events]
             else:
                 continue
             name = b'oh2Fleet.incoming'
@@ -368,6 +377,11 @@ def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
             update, *values = args
             value = pickle.dumps(tuple(values), protocol=2)
             packets.append((8, t, message(avatar, 59, bytes([update]) + bw_string(value))))
+        elif kind == b'M':
+            name = b'oh2Fleet.alliedMap'
+            points = [(slots[key], x, z) for key, x, z in args if key in slots]
+            value = pickle.dumps((points,), protocol=2)
+            packets.append((0x31,t,U32.pack(len(name))+name+U32.pack(len(value))+value))
         elif kind == b'J':
             victim, killer, equipment, reason, affected = args
             if victim in slots:
@@ -414,6 +428,35 @@ def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
             packets.append((0x26,t,struct.pack('<10f',*quaternion(axes),*offset,fov,0,near)))
 
 
+def battlefield_updates(roster, frames, extras, own):
+    deaths = {args[0] for _, kind, args in extras if kind == b'J'}
+    updates = []
+    for stamp, kind, args in extras:
+        if kind == b'X' and args[0] == 'onHealthChanged':
+            victim, (hp, _, killer, reason, _) = args[1:]
+            if hp <= 0 and victim not in deaths:
+                updates.append((stamp, b'J', [victim, killer, 0, reason, 0]))
+                deaths.add(victim)
+    recorded_map = any(kind == b'M' for _, kind, _ in extras)
+    side = roster[own]['team']
+    next_map = frames[0][0]
+    for stamp, frame in frames:
+        sample_map = not recorded_map and stamp >= next_map
+        positions = []
+        for pose in frame:
+            key, hp = pose[0], pose[-1]
+            if hp <= 0 and key not in deaths:
+                # The first observed wreck proves a death, but not who caused it.
+                updates.append((stamp, b'J', [key, 0, 0, 0, 0]))
+                deaths.add(key)
+            if sample_map and hp > 0 and key != own and roster[key]['team'] == side:
+                positions.append([key, round(pose[1]), round(pose[3])])
+        if sample_map:
+            updates.append((stamp, b'M', positions))
+            next_map = stamp + 1.
+    return updates
+
+
 def make(track, seed_path, destination):
     extras = []
     header, roster, frames = load_track(track, extras)
@@ -423,6 +466,7 @@ def make(track, seed_path, destination):
     own_slot, avatar, generic_slot, generic, roster_packet = template_layout(meta, reference)
     original = {int(i): v for i, v in meta['vehicles'].items()}
     player, = [v for v in roster.values() if v['own']]
+    extras.extend(battlefield_updates(roster, frames, extras, player['id']))
     seed_team = original[own_slot]['team']
     slots = {player['id']: own_slot}
     for team in (1, 2):
@@ -455,8 +499,7 @@ def make(track, seed_path, destination):
                 mapName=header['map'], mapDisplayName=header['map'], serverName='OffHangar',
                 vehicles=labels, hasMods=True, oh2Fleet={'version':2 if extras else 1})
     meta['oh2Fleet']['avatarTeamRecorded'] = True
-    if header.get('publicRoster'):
-        meta['oh2Fleet']['arenaDeaths'] = True
+    meta['oh2Fleet']['arenaDeaths'] = True
     if header.get('aimStyles'):
         meta['oh2Fleet']['aimStyles'] = header['aimStyles']
     origin = frames[0][0]
@@ -464,6 +507,11 @@ def make(track, seed_path, destination):
         meta['oh2Fleet']['shotResults'] = True
     if any(kind == b'I' for _, kind, _ in extras):
         meta['oh2Fleet']['incomingFeedback'] = True
+    for _, kind, args in extras:
+        if kind == b'I' and args[:2] == ['start', 'ribbons']:
+            meta['oh2Fleet']['recordedRibbons'] = True
+            meta['oh2Fleet']['ribbonSettings'] = args[2]
+            break
     for _, kind, args in extras:
         if kind == b'I' and args[:2] == ['start', 'history']:
             meta['oh2Fleet']['battleHistory'] = True

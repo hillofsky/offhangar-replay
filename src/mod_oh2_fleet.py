@@ -103,6 +103,8 @@ class Track(object):
         self.errors = set()
         self.angles = {}
         self.score_arena = None
+        self.deaths = set()
+        self.next_map = self.start
         self.sticker_states = {}
         self.period = None
         self.outcome_recorded = False
@@ -249,7 +251,9 @@ class Track(object):
         self.write(b'B', _json_bytes([BigWorld.time()-self.start, 9, team, base]))
 
     def vehicle_killed(self, victim, killer, equipment, reason, affected):
-        self.write(b'J', _json_bytes([BigWorld.time()-self.start, victim, killer, equipment, reason, affected]))
+        if victim not in self.deaths:
+            self.write(b'J', _json_bytes([BigWorld.time()-self.start, victim, killer, equipment, reason, affected]))
+            self.deaths.add(victim)
 
     def sample(self):
         self.flush_destruction()
@@ -276,6 +280,8 @@ class Track(object):
         angles = []
         active = set()
         now = BigWorld.time()
+        sample_map = now >= self.next_map
+        map_points = []
         for key in sorted(ids):
             v = BigWorld.entity(key)
             try:
@@ -291,6 +297,15 @@ class Track(object):
                                typeCD=desc.type.compactDescr, maxHealth=desc.maxHealth)
                     self.write(b'V', _json_bytes(row))
                     self.registered.add(key)
+                info = arena.vehicles.get(key, {})
+                if info.get('isAlive') is False and key not in self.deaths:
+                    death = info.get('deathInfo') or {}
+                    self.vehicle_killed(key, death.get('killerID', 0), death.get('equipmentID', 0),
+                                        death.get('reasonID', 0), death.get('numVehiclesAffected', 0))
+                if sample_map and key != own and info.get('team') == arena.vehicles[own]['team'] and info.get('isAlive'):
+                    pos = v.position if v is not None else arena.positions.get(key)
+                    if pos is not None and (v is None or v.health > 0):
+                        map_points.append((key, int(round(pos[0])), int(round(pos[2]))))
                 if v is None or (self.player_view and not self.visible(player,key)):
                     continue
                 p = v.position
@@ -311,6 +326,9 @@ class Track(object):
                 if key not in self.errors:
                     self.errors.add(key)
                     LOG.exception('Sampling vehicle %s', key)
+        if sample_map:
+            self.write(b'M', _json_bytes([now-self.start] + map_points))
+            self.next_map = now + 1.
         self.active = active
         if rows or (self.player_view and self.frames):
             self.write(b'F', struct.pack('<f', now - self.start) + b''.join(rows))
@@ -412,6 +430,24 @@ def _plain(x):
     return [_plain(v) for v in x]
 
 
+def replay_allied_map(points):
+    replay = BattleReplay.g_replayCtrl
+    if not replay.isPlaying or not (replay.arenaInfo or {}).get('oh2Fleet'):
+        return
+    player = BigWorld.player()
+    arena = getattr(player, 'arena', None)
+    if arena is None or not arena.isAvatarReady:
+        return
+    own = player.playerVehicleID
+    side = arena.vehicles.get(own, {}).get('team')
+    allies = set(k for k, v in arena.vehicles.iteritems() if k != own and v.get('team') == side)
+    positions = dict((k, (x, 0, z)) for k, x, z in points if k in allies and arena.vehicles[k]['isAlive'])
+    for key in allies.difference(positions):
+        arena.positions.pop(key, None)
+    arena.positions.update(positions)
+    arena.onPositionsUpdated()
+
+
 def replay_death(victim, killer, equipment, reason, affected):
     controller = BattleReplay.g_replayCtrl
     if not controller.isPlaying or not (controller.arenaInfo or {}).get('oh2Fleet'):
@@ -466,6 +502,7 @@ def init():
     from gui import InputHandler
     import Avatar, Vehicle
     BattleReplay.g_replayCtrl.setDataCallback('oh2Fleet.death', replay_death)
+    BattleReplay.g_replayCtrl.setDataCallback('oh2Fleet.alliedMap', replay_allied_map)
     sticker_setter = Vehicle.Vehicle.set_damageStickers
 
     @wraps(sticker_setter)
