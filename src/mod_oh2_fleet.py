@@ -102,13 +102,14 @@ class Track(object):
         self.frames = 0
         self.errors = set()
         self.angles = {}
+        self.score_arena = None
         self.sticker_states = {}
         self.period = None
         self.outcome_recorded = False
         self.file = open(self.path + '.part', 'wb')
         self.file.write(b'OHF1')
         header = dict(map=map_name, arena=arena_type, mode=int(mode), build='2.3.1.2',
-                      playerViewOnly=self.player_view, destructiblesRecorded=True)
+                      playerViewOnly=self.player_view, destructiblesRecorded=True, publicRoster=True)
         try:
             header['aimStyles'] = live_aim_styles()
         except Exception:
@@ -241,6 +242,15 @@ class Track(object):
             self.write(b'K', _json_bytes([stamp, vehicle.id, marks]))
         self.sticker_states[vehicle.id] = marks
 
+    def base_points(self, team, base, points, remaining, invaders, stopped):
+        self.write(b'B', _json_bytes([BigWorld.time()-self.start, 8, team, base, points, remaining, invaders, stopped]))
+
+    def base_captured(self, team, base):
+        self.write(b'B', _json_bytes([BigWorld.time()-self.start, 9, team, base]))
+
+    def vehicle_killed(self, victim, killer, equipment, reason, affected):
+        self.write(b'J', _json_bytes([BigWorld.time()-self.start, victim, killer, equipment, reason, affected]))
+
     def sample(self):
         self.flush_destruction()
         from gui.mods.offhangar2 import battle, bots, turret
@@ -249,8 +259,15 @@ class Track(object):
         arena = getattr(player, 'arena', None)
         if arena is None:
             return
+        if self.score_arena is None:
+            self.score_arena = arena
+            arena.onTeamBasePointsUpdate += self.base_points
+            arena.onTeamBaseCaptured += self.base_captured
+            arena.onVehicleKilled += self.vehicle_killed
         own = getattr(player, 'playerVehicleID', 0)
-        if self.player_view and not self.frames and (not own or own not in arena.vehicles or BigWorld.entity(own) is None):
+        if not own or own not in arena.vehicles:
+            return
+        if self.player_view and not self.frames and BigWorld.entity(own) is None:
             return
         ids = set(arena.vehicles) | set(bots.spawned())
         if own:
@@ -261,11 +278,7 @@ class Track(object):
         now = BigWorld.time()
         for key in sorted(ids):
             v = BigWorld.entity(key)
-            if v is None:
-                continue
             try:
-                if self.player_view and not self.visible(player,key):
-                    continue
                 if key not in self.registered:
                     info = arena.vehicles.get(key) or {}
                     desc = getattr(v, 'typeDescriptor', None) or info.get('vehicleType')
@@ -278,6 +291,8 @@ class Track(object):
                                typeCD=desc.type.compactDescr, maxHealth=desc.maxHealth)
                     self.write(b'V', _json_bytes(row))
                     self.registered.add(key)
+                if v is None or (self.player_view and not self.visible(player,key)):
+                    continue
                 p = v.position
                 rows.append(POSE.pack(key, p.x, p.y, p.z, v.yaw, v.pitch, v.roll, v.health))
                 active.add(key)
@@ -359,6 +374,10 @@ class Track(object):
             finish()
 
     def close(self):
+        if self.score_arena is not None:
+            self.score_arena.onTeamBasePointsUpdate -= self.base_points
+            self.score_arena.onTeamBaseCaptured -= self.base_captured
+            self.score_arena.onVehicleKilled -= self.vehicle_killed
         if self.cb is not None:
             BigWorld.cancelCallback(self.cb)
         try:
@@ -393,6 +412,24 @@ def _plain(x):
     return [_plain(v) for v in x]
 
 
+def replay_death(victim, killer, equipment, reason, affected):
+    controller = BattleReplay.g_replayCtrl
+    if not controller.isPlaying or not (controller.arenaInfo or {}).get('oh2Fleet'):
+        return
+    player = BigWorld.player()
+    arena = player.arena
+    row = arena.vehicles.get(victim)
+    if row and row.get('isAlive'):
+        row['isAlive'] = False
+        row['deathInfo'] = dict(victimID=victim, killerID=killer, equipmentID=equipment,
+                               reasonID=reason, numVehiclesAffected=affected)
+        arena.updateVehicleIsAlive(victim, None, victim == player.playerVehicleID)
+        source = arena.vehicles.get(killer)
+        if source and source['team'] != row['team']:
+            stats = arena.statistics.get(killer, {})
+            arena.updateVehiclesFrags(killer, int(stats.get('frags', 0)) + 1)
+
+
 def _combat_hook(cls, name):
     original = getattr(cls, name)
     @wraps(original)
@@ -411,19 +448,9 @@ def _combat_hook(cls, name):
         if name == 'onHealthChanged' and args and args[0] <= 0 and _track is None:
             try:
                 replay = BattleReplay.g_replayCtrl
-                if replay and replay.isPlaying and replay.arenaInfo.get('oh2Fleet', {}).get('version',0) >= 2:
-                    avatar = BigWorld.player()
-                    arena = avatar.arena
-                    row = arena.vehicles.get(entity.id)
-                    if row and row.get('isAlive'):
-                        row['isAlive'] = False
-                        row['deathInfo'] = dict(victimID=entity.id, killerID=args[2], equipmentID=0,
-                                                reasonID=args[3], numVehiclesAffected=0)
-                        arena.updateVehicleIsAlive(entity.id, None, entity.id == avatar.playerVehicleID)
-                        killer = arena.vehicles.get(args[2])
-                        if killer and killer['team'] != row['team']:
-                            stats = arena.statistics.get(args[2], {})
-                            arena.updateVehiclesFrags(args[2], int(stats.get('frags',0)) + 1)
+                info = (replay.arenaInfo or {}).get('oh2Fleet', {}) if replay and replay.isPlaying else {}
+                if info.get('version', 0) >= 2 and not info.get('arenaDeaths'):
+                    replay_death(entity.id, args[2], 0, args[3], 0)
             except Exception:
                 LOG.exception('Applying recorded arena death')
         return result
@@ -438,6 +465,7 @@ def init():
     from gui.mods.offhangar2 import shooting
     from gui import InputHandler
     import Avatar, Vehicle
+    BattleReplay.g_replayCtrl.setDataCallback('oh2Fleet.death', replay_death)
     sticker_setter = Vehicle.Vehicle.set_damageStickers
 
     @wraps(sticker_setter)

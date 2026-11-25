@@ -141,15 +141,18 @@ def aim_frame():
             LOG.exception('Updating replay gun')
 
 
-def legacy_team(replay):
+def recorded_team(replay):
     if not replay or not replay.isPlaying:
         return
     info = replay.arenaInfo or {}
     fleet = info.get('oh2Fleet')
-    if not fleet or fleet.get('avatarTeamRecorded'):
+    if not fleet:
         return
-    own = replay.playerVehicleID or 539411027
-    row = info.get('vehicles', {}).get(str(own)) or info.get('vehicles', {}).get(own)
+    own = replay.playerVehicleID
+    roster = info.get('vehicles', {})
+    row = roster.get(str(own)) or roster.get(own)
+    if row is None and info.get('playerName'):
+        row = next((v for v in roster.itervalues() if v.get('name') == info['playerName']), None)
     if row:
         return row.get('team')
 
@@ -200,7 +203,7 @@ def restore_initial_team(method):
     @wraps(method)
     def start(player, *args, **kwargs):
         try:
-            expected = legacy_team(BattleReplay.g_replayCtrl)
+            expected = recorded_team(BattleReplay.g_replayCtrl)
             if expected and getattr(player, 'team', None) != expected:
                 player.team = expected
         except Exception:
@@ -225,7 +228,7 @@ def tick():
                 version = fleet.get('version', 0)
                 if version:
                     outline = ReplayOutline(fleet.get('outlineTargets'))
-                    team = legacy_team(replay)
+                    team = recorded_team(replay)
             arena = active
         if not version:
             return
@@ -275,6 +278,20 @@ def tick():
 def init():
     global pending
     import Avatar
+    from gui.Scaleform.daapi.view.battle.shared.stats_exchange.stats_ctrl import BattleStatisticsDataController
+    refresh = BattleStatisticsDataController.invalidateVehiclesInfo
+    @wraps(refresh)
+    def refresh_roster(view, arenaDP):
+        expected = recorded_team(BattleReplay.g_replayCtrl)
+        if expected in (1, 2):
+            if not arenaDP.isAllyTeam(expected):
+                arenaDP.switchCurrentTeam(expected)
+            view._BattleStatisticsDataController__avatarTeam = expected
+            cached = view._BattleStatisticsDataController__reusable
+            if any(enemy != (side != expected) for side, (enemy, _) in cached.iteritems()):
+                view._BattleStatisticsDataController__clearTeamOverrides()
+        return refresh(view, arenaDP)
+    BattleStatisticsDataController.invalidateVehiclesInfo = refresh_roster
     Avatar.PlayerAvatar.onEnterWorld = restore_initial_team(Avatar.PlayerAvatar.onEnterWorld)
     Avatar.PlayerAvatar.onBecomePlayer = restore_initial_team(Avatar.PlayerAvatar.onBecomePlayer)
     pending = BigWorld.callback(1.,tick)

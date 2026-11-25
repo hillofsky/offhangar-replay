@@ -70,7 +70,7 @@ def load_track(path, extras=None):
                 roster[vehicle['id']] = vehicle
             elif kind == b'F':
                 frames.append((struct.unpack_from('<f', data)[0], list(FRAME.iter_unpack(data[4:]))))
-            elif extras is not None and kind in (b'C', b'X', b'A', b'P', b'R', b'O', b'L', b'S', b'I', b'U', b'D', b'K'):
+            elif extras is not None and kind in (b'C', b'X', b'A', b'P', b'R', b'O', b'L', b'S', b'I', b'U', b'D', b'K', b'B', b'J', b'T'):
                 if kind == b'A':
                     stamp = struct.unpack_from('<f', data)[0]
                     extras.append((stamp, kind, list(struct.iter_unpack('<IH',data[4:]))))
@@ -364,6 +364,16 @@ def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
             name = b'oh2Fleet.spotted'
             payload = pickle.dumps(tuple(args), protocol=2)
             packets.append((0x31, t, U32.pack(len(name))+name+U32.pack(len(payload))+payload))
+        elif kind == b'B':
+            update, *values = args
+            value = pickle.dumps(tuple(values), protocol=2)
+            packets.append((8, t, message(avatar, 59, bytes([update]) + bw_string(value))))
+        elif kind == b'J':
+            victim, killer, equipment, reason, affected = args
+            if victim in slots:
+                name = b'oh2Fleet.death'
+                value = pickle.dumps((slots[victim], slots.get(killer, 0), equipment, reason, affected), protocol=2)
+                packets.append((0x31,t,U32.pack(len(name))+name+U32.pack(len(value))+value))
         elif kind == b'K':
             key, marks = args
             if key in slots:
@@ -425,7 +435,7 @@ def make(track, seed_path, destination):
     for _, frame in frames:
         for pose in frame:
             first.setdefault(pose[0], pose)
-    if set(roster) != set(first):
+    if set(first) - set(roster) or (not header.get('publicRoster') and set(roster) != set(first)):
         raise ValueError('Missing vehicle positions')
     labels = {}
     initially_visible = {pose[0] for pose in frames[0][1]}
@@ -434,7 +444,8 @@ def make(track, seed_path, destination):
         baseline = dict(original.get(slot, original[generic_slot]))
         baseline.update(name=v['name'], fakeName='', clanAbbrev='', team=v['team'],
                         vehicleType=v['tank'], maxHealth=v['maxHealth'], avatarSessionID=str(slot),
-                        position=[first[key][1], first[key][3]], badges=[], frags=0, tkills=0,
+                        position=[first[key][1], first[key][3]] if key in first else [0.,0.],
+                        isAlive=True, deathInfo={}, badges=[], frags=0, tkills=0,
                         vehPostProgression=[], personalMissionIDs=[], prestigeLevel=0, stFrags=0)
         labels[str(slot)] = baseline
         if player_view and key not in initially_visible:
@@ -444,6 +455,8 @@ def make(track, seed_path, destination):
                 mapName=header['map'], mapDisplayName=header['map'], serverName='OffHangar',
                 vehicles=labels, hasMods=True, oh2Fleet={'version':2 if extras else 1})
     meta['oh2Fleet']['avatarTeamRecorded'] = True
+    if header.get('publicRoster'):
+        meta['oh2Fleet']['arenaDeaths'] = True
     if header.get('aimStyles'):
         meta['oh2Fleet']['aimStyles'] = header['aimStyles']
     origin = frames[0][0]
@@ -479,6 +492,9 @@ def make(track, seed_path, destination):
         meta['oh2Fleet']['sniperAim'] = sniper_aim
     if reloads:
         meta['oh2Fleet']['hudReload'] = reloads
+    clip = [[max(0., stamp-origin)] + args for stamp, kind, args in extras if kind == b'T']
+    if clip:
+        meta['oh2Fleet']['clipReload'] = clip
     if outlines:
         meta['oh2Fleet']['outlineTargets'] = outlines
     if player_view:

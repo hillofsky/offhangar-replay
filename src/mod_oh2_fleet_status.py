@@ -10,7 +10,7 @@ import BattleReplay
 import BigWorld
 import Vehicle
 from BattleFeedbackCommon import BATTLE_EVENT_TYPE
-from account_helpers.settings_core.settings_constants import DAMAGE_LOG
+from account_helpers.settings_core.settings_constants import DAMAGE_LOG, DAMAGE_INDICATOR
 from constants import ATTACK_REASON, ATTACK_REASON_INDICES, VEHICLE_SETTING
 from gui.mods import mod_oh2_fleet as fleet
 from gui.Scaleform.daapi.view.battle.shared.crosshair import plugins
@@ -55,7 +55,8 @@ def setting(player, vehicleID, code, value):
 
 def hit(player, hitDirYaw, attackerID, damage, crits, isBlocked, isShellHE, damagedID, attackReasonID):
     if damagedID == player.playerVehicleID:
-        record(b'I', ['hit', hitDirYaw, visible_id(player, attackerID), damage, crits,
+        # The native direction indicator receives a public roster ID (zero for an unknown attacker).
+        record(b'I', ['hit', hitDirYaw, attackerID, damage, crits,
                       bool(isBlocked), bool(isShellHE), attackReasonID])
 
 
@@ -297,6 +298,9 @@ def init():
     original_setting = BattleReplay.BattleReplay.getSetting
     @wraps(original_setting)
     def replay_setting(controller, key, default=None):
+        if (controller.isPlaying and key in (DAMAGE_INDICATOR.VEHICLE_INFO, DAMAGE_INDICATOR.DAMAGE_VALUE,
+                                             DAMAGE_INDICATOR.TYPE) and (controller.arenaInfo or {}).get('oh2Fleet')):
+            return 1
         if controller.isPlaying and key in LOG_SETTINGS:
             try:
                 settings = (controller.arenaInfo or {}).get('oh2Fleet', {}).get('battleLogSettings', {})

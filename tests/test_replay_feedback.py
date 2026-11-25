@@ -11,6 +11,21 @@ from fleet_export import append_extra, append_periods
 
 
 class ReplayFeedbackTest(unittest.TestCase):
+    def test_public_kill_and_base_events_reach_the_native_arena(self):
+        slots = {100: 7, 200: 9}
+        extras = [(4., b'B', [8, 2, 1, 27, 73, 1, False]),
+                  (6., b'B', [8, 2, 1, 0, 0, 0, False]),
+                  (7., b'B', [9, 1, 2]), (8., b'J', [200, 100, 0, 0, 0])]
+        packets = []
+        append_extra(packets, extras, slots, [(4., [])], 4., 100, 17)
+        bases = [(t, b[12], pickle.loads(b[14:])) for k,t,b in packets
+                 if k == 8 and b[12] in (8, 9)]
+        self.assertEqual(bases, [(0., 8, (2, 1, 27, 73, 1, False)),
+                                 (2., 8, (2, 1, 0, 0, 0, False)), (3., 9, (1, 2))])
+        death, = [b for k,t,b in packets if k == 0x31 and t == 4.]
+        self.assertEqual(death[4:18], b'oh2Fleet.death')
+        self.assertEqual(pickle.loads(death[22:]), (9, 7, 0, 0, 0))
+
     def test_damage_stickers_keep_the_exact_hit_and_restore_on_reentry(self):
         mark = (0, 0xdeadbeef12345678, 384032)
         encoded = struct.pack('<IQI', *mark)

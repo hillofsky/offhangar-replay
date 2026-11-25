@@ -86,6 +86,9 @@ class ReplayHUD(object):
         self.animator = plugin._AmmoPlugin__reloadAnimator
         self.events = events
         self.times = [row[0] for row in events or ()]
+        self.clip = data.get('clipReload', ())
+        self.clip_times = [row[0] for row in self.clip]
+        self.last_clip = None
         self.previous = None
         self.last_time = None
         self.cb = None
@@ -120,6 +123,14 @@ class ReplayHUD(object):
                 state = ReloadingTimeSnapshot(actualTime=remaining, baseTime=base, isReloadingBlocked=blocked)
                 self.animator.setReloading(state, available)
             self.previous = row
+            i = bisect_right(self.clip_times, now) - 1
+            clip = self.clip[i] if i >= 0 else None
+            if clip is not None and (clip is not self.last_clip or seek):
+                stamp, left, base, critical, timer, red = clip
+                self.animator.setClipAutoLoading(max(0., left - (now-stamp)), base, critical, timer, red)
+            elif self.last_clip is not None and clip is None:
+                self.animator.setClipAutoLoading(0., 0.)
+            self.last_clip = clip
         except Exception:
             LOG.exception('Updating replay reload indicator')
             return
@@ -223,6 +234,14 @@ def init():
             record(b'L', [remaining, state.getBaseValue(), bool(blocked), bool(isShotAvailable)])
         return result
     plugins._ASAutoReloadProxy.setReloading = capture
+    live_clip = plugins._ASAutoReloadProxy.setClipAutoLoading
+    @wraps(live_clip)
+    def capture_clip(proxy, timeLeft, baseTime, isCritical=False, isTimerOn=False, isRedText=False):
+        result = live_clip(proxy, timeLeft, baseTime, isCritical, isTimerOn, isRedText)
+        if fleet._track is not None:
+            record(b'T', [timeLeft, baseTime, bool(isCritical), bool(isTimerOn), bool(isRedText)])
+        return result
+    plugins._ASAutoReloadProxy.setClipAutoLoading = capture_clip
     start, stop = plugins.AmmoPlugin.start, plugins.AmmoPlugin.stop
     @wraps(start)
     def ready(plugin):
