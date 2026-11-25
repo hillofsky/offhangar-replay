@@ -13,6 +13,7 @@ from BattleFeedbackCommon import BATTLE_EVENT_TYPE
 from account_helpers.settings_core.settings_constants import BATTLE_EVENTS, DAMAGE_LOG, DAMAGE_INDICATOR
 from account_helpers.settings_core.SettingsCore import SettingsCore
 from gui.Scaleform.daapi.view.battle.shared.ribbons_panel import BattleRibbonsPanel
+from ReplayEvents import g_replayEvents
 from constants import ATTACK_REASON, ATTACK_REASON_INDICES, VEHICLE_SETTING
 from gui.mods import mod_oh2_fleet as fleet
 from gui.Scaleform.daapi.view.battle.shared.crosshair import plugins
@@ -257,6 +258,72 @@ class Loadout(object):
             self.timer = None
 
 
+class ReplayRibbons(object):
+    # Flash animates in real time and has its own queue. On a timeline jump, only
+    # reintroduce recent ribbons that fit in the native three-row display.
+    def __init__(self, panel, methods, rows):
+        self.panel = panel
+        self.methods = methods
+        self.rows = rows
+        self.times = [row[0] for row in rows]
+        self.recent = OrderedDict()
+        self.active = set()
+        self.pending = {}
+        self.speed = BattleReplay.g_replayCtrl.playbackSpeed
+
+    def dispatch(self, index, args, now):
+        key = args[1]
+        update = index and key in self.active
+        if not update:
+            self.pending[key] = now
+        self.active.add(key)
+        self.methods[1 if update else 0](self.panel, *args)
+
+    def play(self, index, args):
+        replay = BattleReplay.g_replayCtrl
+        if replay.isTimeWarpInProgress:
+            return
+        now = replay.currentTime
+        key = args[1]
+        self.recent.pop(key, None)
+        self.recent[key] = (now, args)
+        while len(self.recent) > 3:
+            self.recent.popitem(last=False)
+        if replay.playbackSpeed > 1 and self.pending and min(self.pending.values()) < now - 3.:
+            self.restore()
+        else:
+            self.dispatch(index, args, now)
+
+    def reset(self):
+        self.panel.as_resetS()
+        self.active.clear()
+        self.pending.clear()
+
+    def seek_start(self):
+        self.recent.clear()
+        self.reset()
+
+    def restore(self):
+        now = BattleReplay.g_replayCtrl.currentTime
+        self.reset()
+        if self.rows:
+            left, right = bisect_right(self.times, now - 3.), bisect_right(self.times, now + .0001)
+            for stamp, args in self.rows[left:right]:
+                self.recent.pop(args[1], None)
+                self.recent[args[1]] = (stamp, args)
+        current = [(t, args) for t, args in self.recent.values() if now-3. < t <= now+.0001]
+        self.recent.clear()
+        for t, args in current[-3:]:
+            self.recent[args[1]] = (t, args)
+            self.dispatch(0, args, now)
+
+    def change_speed(self, speed):
+        if speed and speed != self.speed:
+            self.speed = speed
+            if not BattleReplay.g_replayCtrl.isTimeWarpInProgress:
+                self.restore()
+
+
 def install_ribbons():
     original_setting = SettingsCore.getSetting
     @wraps(original_setting)
@@ -286,37 +353,45 @@ def install_ribbons():
         return show
     BattleRibbonsPanel.as_addBattleEfficiencyEventS = observe(0)
     BattleRibbonsPanel.as_updateBattleEfficiencyEventS = observe(1)
-    populate, dispose, hide = BattleRibbonsPanel._populate, BattleRibbonsPanel._dispose, BattleRibbonsPanel.onHide
+    populate, dispose = BattleRibbonsPanel._populate, BattleRibbonsPanel._dispose
+    show, hide = BattleRibbonsPanel.onShow, BattleRibbonsPanel.onHide
     @wraps(populate)
     def opened(panel):
         global ribbon_panel
         result = populate(panel)
-        panel._fleetRibbons = set()
-        ribbon_panel = panel
+        replay = BattleReplay.g_replayCtrl
+        data = (replay.arenaInfo or {}).get('oh2Fleet') if replay.isPlaying else None
+        if data and data.get('recordedRibbons'):
+            ribbon_panel = ReplayRibbons(panel, methods, data.get('ribbonTimeline', []))
+            g_replayEvents.onTimeWarpStart += ribbon_panel.seek_start
+            g_replayEvents.onTimeWarpFinish += ribbon_panel.restore
+            g_replayEvents.onPlaybackSpeedChanged += ribbon_panel.change_speed
         return result
     @wraps(dispose)
     def closed(panel):
         global ribbon_panel
-        if ribbon_panel is panel:
+        if ribbon_panel and ribbon_panel.panel is panel:
+            g_replayEvents.onTimeWarpStart -= ribbon_panel.seek_start
+            g_replayEvents.onTimeWarpFinish -= ribbon_panel.restore
+            g_replayEvents.onPlaybackSpeedChanged -= ribbon_panel.change_speed
             ribbon_panel = None
         return dispose(panel)
+    @wraps(show)
+    def shown(panel, key):
+        if ribbon_panel and ribbon_panel.panel is panel:
+            ribbon_panel.pending.pop(key, None)
+        return show(panel, key)
     @wraps(hide)
     def hidden(panel, key):
-        if hasattr(panel, '_fleetRibbons'):
-            panel._fleetRibbons.discard(key)
+        if ribbon_panel and ribbon_panel.panel is panel:
+            ribbon_panel.active.discard(key)
+            ribbon_panel.pending.pop(key, None)
         return hide(panel, key)
-    BattleRibbonsPanel._populate, BattleRibbonsPanel._dispose, BattleRibbonsPanel.onHide = opened, closed, hidden
+    BattleRibbonsPanel._populate, BattleRibbonsPanel._dispose = opened, closed
+    BattleRibbonsPanel.onShow, BattleRibbonsPanel.onHide = shown, hidden
     def play(index, args):
-        panel = ribbon_panel
-        replay = BattleReplay.g_replayCtrl
-        if not panel or not replay.isPlaying or not (replay.arenaInfo or {}).get('oh2Fleet', {}).get('recordedRibbons'):
-            return
-        if replay.isTimeWarpInProgress:
-            panel._fleetRibbons.clear()
-            return
-        key = args[1]
-        methods[1 if index and key in panel._fleetRibbons else 0](panel, *args)
-        panel._fleetRibbons.add(key)
+        if ribbon_panel:
+            ribbon_panel.play(index, args)
     BattleReplay.g_replayCtrl.setDataCallback('oh2Fleet.ribbon', play)
 
 

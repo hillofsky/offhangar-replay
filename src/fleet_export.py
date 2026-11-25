@@ -511,6 +511,9 @@ def make(track, seed_path, destination):
         if kind == b'I' and args[:2] == ['start', 'ribbons']:
             meta['oh2Fleet']['recordedRibbons'] = True
             meta['oh2Fleet']['ribbonSettings'] = args[2]
+            meta['oh2Fleet']['ribbonTimeline'] = sorted(
+                ([max(0., t-origin), row[2]] for t, tag, row in extras
+                 if tag == b'I' and row[0] == 'ribbon'), key=lambda entry: entry[0])
             break
     for _, kind, args in extras:
         if kind == b'I' and args[:2] == ['start', 'history']:

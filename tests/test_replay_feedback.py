@@ -3,14 +3,44 @@ from pathlib import Path
 import pickle
 import struct
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from fleet_export import append_extra, append_periods
+from fleet_export import FRAME, append_extra, append_periods, make
+from replay_sample import decode
 
 
 class ReplayFeedbackTest(unittest.TestCase):
+    def test_seek_index_matches_native_ribbon_packet_times(self):
+        seed = Path(__file__).resolve().parents[1] / 'templates' / 'bootstrap.dat'
+        header = dict(arena=1, map='01_karelia', mode=2)
+        player = dict(id=101, own=True, team=1, tank='test:tank', name='Driver',
+                      maxHealth=100, cd='', outfit='', typeCD=1)
+        flame = ['burn', 47, '55', 'Bzyg', 'heavyTank', '', -1, '']
+        update = list(flame)
+        update[2] = '105'
+        records = [(b'H', header), (b'V', player), (b'I', [0., 'start', 'ribbons', {}]),
+                   (b'F', struct.pack('<f', 9.) + FRAME.pack(101, 0, 0, 0, 0, 0, 0, 100)),
+                   (b'I', [11., 'ribbon', 0, flame]), (b'I', [12., 'ribbon', 1, update]),
+                   (b'E', dict(vehicles=1, frames=1))]
+        with TemporaryDirectory() as directory:
+            track = Path(directory) / 'test.ohtrack'
+            with track.open('wb') as stream:
+                stream.write(b'OHF1')
+                for tag, data in records:
+                    payload = data if isinstance(data, bytes) else json.dumps(data).encode()
+                    stream.write(struct.pack('<cI', tag, len(payload)) + payload)
+            replay = track.with_suffix('.wotreplay')
+            make(track, seed, replay)
+            meta, packets = decode(replay.read_bytes())
+        timeline = json.loads(meta[0])['oh2Fleet']['ribbonTimeline']
+        actual = [[t, pickle.loads(b[8 + len(b'oh2Fleet.ribbon'):])[1]] for k, t, b in packets
+                  if k == 0x31 and b[4:4 + len(b'oh2Fleet.ribbon')] == b'oh2Fleet.ribbon']
+        self.assertEqual(timeline, [[2., flame], [3., update]])
+        self.assertEqual(timeline, actual)
+
     def test_ribbon_updates_and_feedback_target_types(self):
         rows = [[0, 100, 1, 0, True], [15, 100, 1, 0, False], [20, 0, 12, 0, False],
                 [14, 200, 5, 12], [7, 100, 27, 17]]
