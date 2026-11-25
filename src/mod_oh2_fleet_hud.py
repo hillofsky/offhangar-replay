@@ -185,14 +185,23 @@ def install_aim_settings():
 def install_countdown():
     from gui.Scaleform.daapi.view.battle.shared.prebattle_timers.timer_base import PreBattleTimerBase
     from gui.battle_control.battle_constants import COUNTDOWN_STATE
+    from gui.shared.utils.functions import getArenaSubTypeName
     original = PreBattleTimerBase.setCountdown
     @wraps(original)
     def countdown(view, state, timeLeft):
-        result = original(view, state, timeLeft)
         replay = BattleReplay.g_replayCtrl
-        if (state == COUNTDOWN_STATE.START and timeLeft is not None and timeLeft >= 0
-                and replay.isPlaying and (replay.arenaInfo or {}).get('oh2Fleet')):
-            view.as_setMessageS(u'%s\n%d' % (view._getMessage(), int(timeLeft)))
+        fleet_start = (state == COUNTDOWN_STATE.START and replay.isPlaying
+                       and (replay.arenaInfo or {}).get('oh2Fleet'))
+        if fleet_start and (not view._battleTypeStr or view._battleTypeStr.strip().lower() == 'none'):
+            arena_id = view.sessionProvider.arenaVisitor.type.getID()
+            view._battleTypeStr = '#arenas:type/%s/name' % getArenaSubTypeName(arena_id)
+        result = original(view, state, timeLeft)
+        if fleet_start and timeLeft is not None and timeLeft >= 0:
+            label = view._getMessage()
+            digits = str(int(timeLeft))
+            if label and label.strip().lower() not in ('', 'none'):
+                digits = label + '\n' + digits
+            view.as_setMessageS(digits)
         return result
     PreBattleTimerBase.setCountdown = countdown
 

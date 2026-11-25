@@ -70,7 +70,7 @@ def load_track(path, extras=None):
                 roster[vehicle['id']] = vehicle
             elif kind == b'F':
                 frames.append((struct.unpack_from('<f', data)[0], list(FRAME.iter_unpack(data[4:]))))
-            elif extras is not None and kind in (b'C', b'X', b'A', b'P', b'R', b'O', b'L', b'S', b'I', b'U'):
+            elif extras is not None and kind in (b'C', b'X', b'A', b'P', b'R', b'O', b'L', b'S', b'I', b'U', b'D'):
                 if kind == b'A':
                     stamp = struct.unpack_from('<f', data)[0]
                     extras.append((stamp, kind, list(struct.iter_unpack('<IH',data[4:]))))
@@ -219,6 +219,33 @@ def bw_array(items, encode_item):
     count = len(items)
     prefix = bytes([count]) if count < 255 else b'\xff'+count.to_bytes(3,'little')
     return prefix+b''.join(encode_item(item) for item in items)
+
+
+def append_destructibles(packets, extras, template, origin):
+    states = {}
+    controllers = set()
+    seen = set()
+    for stamp, _, (chunk, kind, data) in sorted((e for e in extras if e[1] == b'D'), key=lambda e: e[0]):
+        if not 0 <= chunk <= 65535 or kind not in (0, 1, 2, 3) or len(data) != (5 if kind == 0 else 3):
+            raise ValueError('Invalid destructible record')
+        row = bytes(data)
+        key = (chunk, kind, row[:2], row[2] >> 1 if kind == 3 else None)
+        if key in seen:
+            continue
+        seen.add(key)
+        entity = 0x07000000 + chunk
+        if chunk not in controllers:
+            # AreaDestructibles derives its chunk from its world position on entry.
+            spawn = bytearray(template[:46])
+            struct.pack_into('<IH', spawn, 0, entity, 7)
+            x = 100 * ((chunk >> 8) - 127) + 50
+            z = 100 * ((chunk & 255) - 127) + 50
+            struct.pack_into('<6fI', spawn, 18, x, 0, z, 0, 0, 0, 9)
+            packets.append((5, 0., bytes(spawn) + bytes.fromhex('040000010002000300')))
+            controllers.add(chunk)
+        rows = states.setdefault((chunk, kind), [])
+        rows.append(row)
+        packets.append((7, max(0., stamp - origin), message(entity, 3 - kind, bw_array(rows, bytes))))
 
 
 def append_radio(packets, extras, slots, origin):
@@ -455,9 +482,11 @@ def make(track, seed_path, destination):
     packets = []
     added = False
     spawned = set()
-    map_specific = {U32.unpack_from(b)[0] for k,t,b in reference
-                    if k == 5 and t == 0 and b[4] in (7, 40)}
     seed_map = json.loads(metadata[0])['mapName']
+    has_destruction = header.get('destructiblesRecorded', False)
+    map_specific = {U32.unpack_from(b)[0] for k,t,b in reference if k == 5 and t == 0
+                    and ((b[4] == 7 and has_destruction) or
+                         (b[4] in (7, 40) and header['map'] != seed_map))}
     for kind, t, b in reference:
         if t > 0.001 or kind == 0xffffffff:
             break
@@ -482,9 +511,9 @@ def make(track, seed_path, destination):
                     spawned.add(key)
                 added = True
             continue
-        elif header['map'] != seed_map and kind == 5 and U32.unpack_from(b)[0] in map_specific:
+        elif kind in (5, 7, 8) and U32.unpack_from(b)[0] in map_specific:
             continue
-        elif header['map'] != seed_map and kind == 0x32 and any(U32.pack(key) in b for key in map_specific):
+        elif kind == 0x32 and b != roster_packet and any(U32.pack(key) in b for key in map_specific):
             continue
         elif kind == 10:
             if U32.unpack_from(b)[0] != avatar:
@@ -499,6 +528,9 @@ def make(track, seed_path, destination):
         packets.append((kind, 0., b))
     if not added:
         raise ValueError('Missing vehicle creation slot')
+    if has_destruction:
+        area = next((b for k,t,b in reference if k == 5 and b[4] == 7), generic)
+        append_destructibles(packets, extras, area, origin)
     for t, frame in frames:
         if player_view:
             present = {pose[0] for pose in frame}

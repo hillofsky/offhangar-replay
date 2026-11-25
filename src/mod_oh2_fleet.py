@@ -8,6 +8,7 @@ import struct
 import time
 import uuid
 from functools import wraps
+from collections import OrderedDict
 
 import BattleReplay
 import BigWorld
@@ -94,6 +95,8 @@ class Track(object):
         self.last_outline = None
         self.visible_shots = set()
         self.known_wrecks = set()
+        self.pending_destruction = OrderedDict()
+        self.recorded_destruction = set()
         self.impact_target = None
         self.cb = None
         self.frames = 0
@@ -104,7 +107,7 @@ class Track(object):
         self.file = open(self.path + '.part', 'wb')
         self.file.write(b'OHF1')
         header = dict(map=map_name, arena=arena_type, mode=int(mode), build='2.3.1.2',
-                      playerViewOnly=self.player_view)
+                      playerViewOnly=self.player_view, destructiblesRecorded=True)
         try:
             header['aimStyles'] = live_aim_styles()
         except Exception:
@@ -208,7 +211,29 @@ class Track(object):
                 self.errors.add('outline')
                 LOG.exception('Recording player target outline')
 
+    def remember_destruction(self, chunk, kind, data):
+        if kind not in (0, 1, 2, 3) or len(data) != (5 if kind == 0 else 3):
+            return
+        index = data[0] << 8 | data[1]
+        key = (chunk, index, data[2] >> 1 if kind == 3 else None)
+        if key not in self.recorded_destruction:
+            self.pending_destruction[key] = (BigWorld.time() - self.start, chunk, kind, tuple(data))
+
+    def flush_destruction(self):
+        if not self.pending_destruction:
+            return
+        from gui.mods.offhangar2 import destructibles
+        destroyed = destructibles._destroyed
+        objects = set((chunk, idx) for chunk, idx, mat in destroyed)
+        for key, event in self.pending_destruction.iteritems():
+            confirmed = key[:2] in objects if key[2] is None else key in destroyed
+            if confirmed:
+                self.write(b'D', _json_bytes(event))
+                self.recorded_destruction.add(key)
+        self.pending_destruction.clear()
+
     def sample(self):
+        self.flush_destruction()
         from gui.mods.offhangar2 import battle, bots, turret
         from gun_rotation_shared import encodeGunAngles
         player = BigWorld.player()
@@ -326,6 +351,7 @@ class Track(object):
         if self.cb is not None:
             BigWorld.cancelCallback(self.cb)
         try:
+            self.flush_destruction()
             self.write(b'E', _json_bytes(dict(vehicles=len(self.registered), frames=self.frames)))
         finally:
             self.file.close()
@@ -401,6 +427,16 @@ def init():
     from gui.mods.offhangar2 import shooting
     from gui import InputHandler
     import Avatar, Vehicle
+    from AreaDestructibles import DestructiblesManager
+    native_destroy = DestructiblesManager.orderDestructibleDestroy
+
+    @wraps(native_destroy)
+    def destroy(self, chunkID, dmgType, destrData, isNeedAnimation, syncWithProjectile=False, forceRemove=False):
+        if _track is not None:
+            _track.remember_destruction(chunkID, dmgType, destrData)
+        return native_destroy(self, chunkID, dmgType, destrData, isNeedAnimation, syncWithProjectile, forceRemove)
+
+    DestructiblesManager.orderDestructibleDestroy = destroy
     InputHandler.g_instance.onKeyDown += _toggle_view
     def watch_focus(method):
         @wraps(method)

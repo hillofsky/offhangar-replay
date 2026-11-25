@@ -37,6 +37,7 @@ By default, the mod records only vehicles visible to the player. To record all v
 ### What gets recorded
 
 - The countdown once the vehicle is ready, and the remaining battle time.
+- Fallen trees and columns, broken props, and destroyed building sections. Starting with v1.0.5, the recorder saves the object identity, destruction time, and fall direction so the client can apply the effect on the map.
 - Seconds remaining in the prebattle message. Standard allied and enemy overhead markers show tank tiers by default.
 - Recorded player shot results drive the client's own penetration, non-penetration and ricochet audio. Older replays use a generic hit confirmation for recorded non-lethal shell damage to an enemy.
 - Hull auto-rotation, cruise control, player vehicle fires, and kill and critical hit feedback.
