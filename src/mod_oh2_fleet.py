@@ -100,6 +100,7 @@ class Track(object):
         self.errors = set()
         self.angles = {}
         self.period = None
+        self.outcome_recorded = False
         self.file = open(self.path + '.part', 'wb')
         self.file.write(b'OHF1')
         header = dict(map=map_name, arena=arena_type, mode=int(mode), build='2.3.1.2',
@@ -270,7 +271,7 @@ class Track(object):
             if period == 2 and getattr(battle, '_countdownState', {}).get('armed') is False:
                 period, length, end = 1, 0., 0.
             timing = (period, length, end)
-            if period in (1, 2, 3, 4) and timing != self.period:
+            if not self.outcome_recorded and period in (1, 2, 3, 4) and timing != self.period:
                 self.period = timing
                 self.write(b'P', _json_bytes([now-self.start, period, length,
                                               max(0., end - BigWorld.serverTime())]))
@@ -449,6 +450,22 @@ def init():
         _combat_hook(Vehicle.Vehicle, name)
     create = battle._createArenaAsBattleWorld
     leave = battle.leave
+    end_battle = battle._endBattle
+
+    @wraps(end_battle)
+    def outcome(reason, winnerTeam=0, finishReason=0):
+        result = end_battle(reason, winnerTeam, finishReason)
+        track = _track
+        if track is not None and not track.outcome_recorded:
+            try:
+                from gui.mods.offhangar2 import config
+                delay = max(0., float(config.BATTLE_AUTO_RETURN_DELAY))
+                track.write(b'P', _json_bytes([BigWorld.time()-track.start, 4, delay, delay,
+                                               [int(winnerTeam), int(finishReason)]]))
+                track.outcome_recorded = True
+            except Exception:
+                LOG.exception('Recording battle outcome')
+        return result
 
     @wraps(create)
     def begin(map_name, arena_type):
@@ -471,6 +488,7 @@ def init():
         return leave(*args, **kwargs)
 
     battle._createArenaAsBattleWorld = begin
+    battle._endBattle = outcome
     battle.leave = end
     atexit.register(finish)
     _installed = True

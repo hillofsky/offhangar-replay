@@ -1,6 +1,6 @@
 """Record the local player's loadout changes and incoming battle feedback."""
 from bisect import bisect_right
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 from functools import wraps
 import json
 import logging
@@ -20,7 +20,10 @@ from gui.battle_control.controllers.vehicle_state_ctrl import VehicleStateContro
 LOG = logging.getLogger('oh2.fleet.status')
 EVENTS = (BATTLE_EVENT_TYPE.RECEIVED_DAMAGE, BATTLE_EVENT_TYPE.TANKING, BATTLE_EVENT_TYPE.RECEIVED_CRIT,
           BATTLE_EVENT_TYPE.DAMAGE, BATTLE_EVENT_TYPE.RADIO_ASSIST, BATTLE_EVENT_TYPE.TRACK_ASSIST,
-          BATTLE_EVENT_TYPE.STUN_ASSIST, BATTLE_EVENT_TYPE.DESTRUCTIBLE_DAMAGED)
+          BATTLE_EVENT_TYPE.STUN_ASSIST, BATTLE_EVENT_TYPE.DESTRUCTIBLE_DAMAGED,
+          BATTLE_EVENT_TYPE.KILL, BATTLE_EVENT_TYPE.CRIT)
+ShotResult = namedtuple('ShotResult', 'vehicleID hitFlags gunInstallationIndex')
+DRIVER_STATES = (VEHICLE_VIEW_STATE.AUTO_ROTATION, VEHICLE_VIEW_STATE.CRUISE_MODE, VEHICLE_VIEW_STATE.FIRE)
 LOG_SETTINGS = (DAMAGE_LOG.SHOW_DETAILS, DAMAGE_LOG.EVENT_POSITIONS, DAMAGE_LOG.SHOW_EVENT_TYPES,
                 DAMAGE_LOG.TOTAL_DAMAGE, DAMAGE_LOG.BLOCKED_DAMAGE, DAMAGE_LOG.ASSIST_DAMAGE, DAMAGE_LOG.ASSIST_STUN)
 SELECTION = (VEHICLE_SETTING.CURRENT_SHELLS, VEHICLE_SETTING.NEXT_SHELLS)
@@ -54,6 +57,12 @@ def hit(player, hitDirYaw, attackerID, damage, crits, isBlocked, isShellHE, dama
     if damagedID == player.playerVehicleID:
         record(b'I', ['hit', hitDirYaw, visible_id(player, attackerID), damage, crits,
                       bool(isBlocked), bool(isShellHE), attackReasonID])
+
+
+def shot_results(player, results):
+    rows = [[r.vehicleID, r.hitFlags, r.gunInstallationIndex] for r in results if visible_id(player, r.vehicleID)]
+    if rows:
+        record(b'I', ['shots', rows])
 
 
 def events(player, events):
@@ -102,7 +111,11 @@ def playback_incoming(encoded):
         return
     p = BigWorld.player()
     row = json.loads(encoded)
-    if row[0] == 'hit' and not r.isTimeWarpInProgress:
+    if row[0] == 'shots' and not r.isTimeWarpInProgress:
+        results = [ShotResult(*item) for item in row[1] if item[0] in p.arena.vehicles]
+        if results:
+            p.showShotResults(results)
+    elif row[0] == 'hit' and not r.isTimeWarpInProgress:
         _, yaw, attacker, damage, crits, blocked, he, reason = row
         p.showOwnVehicleHitDirection(yaw, attacker, damage, crits, blocked, he, p.playerVehicleID, reason)
     elif row[0] == 'events':
@@ -120,6 +133,11 @@ def legacy_hit(vehicle, newHealth, oldHealth, attackerID, attackReasonID, attack
         return
     p = BigWorld.player()
     received = vehicle.id == r.playerVehicleID
+    if (not received and not data.get('shotResults') and not r.isTimeWarpInProgress and newHealth > 0
+            and attackReasonID == ATTACK_REASON_INDICES[ATTACK_REASON.SHOT]
+            and p.arena.vehicles.get(vehicle.id, {}).get('team') in (1, 2)
+            and p.arena.vehicles[vehicle.id]['team'] != p.team):
+        p.soundNotifications.play('enemy_hp_damaged_by_projectile_by_player', boundVehicleID=vehicle.id)
     if received and data.get('incomingFeedback') or not received and data.get('battleHistory'):
         return
     if not received:
@@ -149,6 +167,7 @@ class Loadout(object):
         self.timer = None
         self.errors = set()
         self.shown_devices = set()
+        self.on_fire = False
 
     def snapshot(self, end):
         # Keep first appearance order for slots, then restore shell selection.
@@ -159,6 +178,8 @@ class Loadout(object):
                 items[row[2], row[8]] = row
             elif row[1] == 'selection':
                 choices[row[2]] = row
+            elif row[1] == 'driverState':
+                choices['driverState', row[2]] = row
             elif row[1] == 'device':
                 name, actual = row[2], row[4]
                 devices[name] = [row[0], 'device', name, actual, actual]
@@ -169,6 +190,8 @@ class Loadout(object):
         # Rewinding before a hit must clear the icon from the later timeline.
         for name in sorted(self.shown_devices.difference(devices)):
             devices[name] = [0., 'device', name, 'normal', 'normal']
+        if self.on_fire:
+            choices.setdefault(('driverState', VEHICLE_VIEW_STATE.FIRE), [0., 'driverState', VEHICLE_VIEW_STATE.FIRE, False])
         return list(items.values()) + list(choices.values()) + list(devices.values()) + list(repairs.values())
 
     def apply(self, p, row, now):
@@ -179,6 +202,9 @@ class Loadout(object):
             p.updateVehicleAmmo(p.playerVehicleID, cd, count, stage, prev, remaining, total, index)
         elif row[1] == 'selection' and row[2] in SELECTION:
             p.updateVehicleSetting(p.playerVehicleID, row[2], row[3])
+        elif row[1] == 'driverState' and row[2] == VEHICLE_VIEW_STATE.FIRE:
+            p.guiSessionProvider.invalidateVehicleState(row[2], row[3], p.playerVehicleID)
+            self.on_fire = bool(row[3])
         elif row[1] == 'device':
             name, display, actual = row[2:]
             p.guiSessionProvider.invalidateVehicleState(
@@ -243,16 +269,21 @@ def init():
         except Exception:
             LOG.warning('Could not read damage log settings', exc_info=True)
         track.write(b'I', fleet._json_bytes([0., 'start', 'history', settings]))
+        track.write(b'I', fleet._json_bytes([0., 'start', 'shotResults']))
     fleet.Track.__init__ = begin
     notify = VehicleStateController.notifyStateChanged
     @wraps(notify)
     def state_changed(ctrl, stateID, value):
         result = notify(ctrl, stateID, value)
         track = fleet._track
-        if track is not None and stateID in (VEHICLE_VIEW_STATE.DEVICES, VEHICLE_VIEW_STATE.REPAIRING):
+        if track is not None and stateID in (VEHICLE_VIEW_STATE.DEVICES, VEHICLE_VIEW_STATE.REPAIRING) + DRIVER_STATES:
             try:
                 if ctrl.getControllingVehicleID() == BigWorld.player().playerVehicleID:
-                    if stateID == VEHICLE_VIEW_STATE.REPAIRING:
+                    if stateID in DRIVER_STATES:
+                        if track.device_states.get(stateID) != value:
+                            record(b'U', ['driverState', stateID, value])
+                            track.device_states[stateID] = value
+                    elif stateID == VEHICLE_VIEW_STATE.REPAIRING:
                         record(b'U', ['repair'] + list(value))
                     elif track.device_states.get(value[0]) != tuple(value):
                         record(b'U', ['device'] + list(value))
@@ -276,7 +307,8 @@ def init():
         return original_setting(controller, key, default)
     BattleReplay.BattleReplay.getSetting = replay_setting
     for name, handler in (('updateVehicleAmmo', ammo), ('updateVehicleSetting', setting),
-                          ('showOwnVehicleHitDirection', hit), ('onBattleEvents', events)):
+                          ('showOwnVehicleHitDirection', hit), ('onBattleEvents', events),
+                          ('showShotResults', shot_results)):
         hook_capture(name, handler)
     BattleReplay.g_replayCtrl.setDataCallback('oh2Fleet.incoming', playback_incoming)
     health = Vehicle.Vehicle.onHealthChanged

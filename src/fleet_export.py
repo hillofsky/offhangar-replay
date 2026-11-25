@@ -269,21 +269,25 @@ def append_periods(packets, extras, frames, origin, avatar):
     packets[:] = [(k, t, b) for k, t, b in packets if k not in (0x16, 0x17)
                   and not (k == 8 and b.startswith(struct.pack('<II', avatar, 59)) and b[12:13] == b'\x03')]
     timeline = []
-    for stamp, period, length, remaining in phases:
+    for stamp, period, length, remaining, *details in phases:
         deadline = stamp + remaining
         # The first sample follows the actual transition by up to one sampling interval.
         start = max(0., deadline-length) if period in (2, 3) and 0 <= remaining <= length else max(0., stamp)
         if timeline:
             start = max(timeline[-1][0], start)
-        timeline.append((start, period, length, deadline))
+        outcome = tuple(details[0]) if period == 4 and details else ()
+        timeline.append((start, period, length, deadline, outcome))
     finish = max(frames[-1][0], max((stamp for stamp, _, _ in extras), default=origin)) - origin
-    for i, (start, period, length, deadline) in enumerate(timeline):
+    for i, (start, period, length, deadline, outcome) in enumerate(timeline):
         stop = timeline[i+1][0] if i+1 < len(timeline) else finish
         # Old recorders kept the 45-second loading guard and missed the real countdown.
         if period == 2 and length == 45. and i+1 < len(timeline) and timeline[i+1][1] == 3:
             if abs(deadline-stop) > .25:
                 deadline, length = stop, stop-start
-        info = zlib.compress(pickle.dumps((period, clock+deadline, length, ()), protocol=2))
+        if period == 4 and outcome:
+            # The native 2.3.1.2 stream sends Avatar.onRoundFinished before updating the arena.
+            packets.append((8, start, message(avatar, 10, struct.pack('<BB', *outcome))))
+        info = zlib.compress(pickle.dumps((period, clock+deadline, length, outcome), protocol=2))
         packets.append((8, start, message(avatar, 59, b'\x03'+bw_string(info))))
         packets.append((0x16, start, U32.pack(period)))
         # The native replay HUD reads arenaLength, which the live HUD records on each tick.
@@ -307,10 +311,19 @@ def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
     append_radio(packets,extras,slots,origin)
     for stamp, kind, args in extras:
         t=max(0,stamp-origin)
-        if kind == b'I' and args[0] != 'start':
+        if kind == b'U' and args[0] == 'driverState' and args[1] in (32, 128):
+            state, value = args[1:]
+            name = ('client_vehicle_state_%d' % state).encode('ascii')
+            payload = pickle.dumps((state, value, 0), protocol=2)
+            packets.append((0x31, t, U32.pack(len(name))+name+U32.pack(len(payload))+payload))
+        elif kind == b'I' and args[0] != 'start':
             if args[0] == 'hit':
                 _, yaw, attacker, damage, crits, blocked, he, reason = args
                 row = ['hit', yaw, slots.get(attacker, 0), damage, crits, blocked, he, reason]
+            elif args[0] == 'shots':
+                row = ['shots', [[slots[key], flags, gun] for key, flags, gun in args[1] if key in slots]]
+                if not row[1]:
+                    continue
             elif args[0] == 'events':
                 # DESTRUCTIBLE_DAMAGED (14) identifies a map object, not a vehicle.
                 row = ['events', [[event, target if event == 14 else slots.get(target, 0), count, details]
@@ -402,6 +415,8 @@ def make(track, seed_path, destination):
     if header.get('aimStyles'):
         meta['oh2Fleet']['aimStyles'] = header['aimStyles']
     origin = frames[0][0]
+    if any(kind == b'I' and args[:2] == ['start', 'shotResults'] for _, kind, args in extras):
+        meta['oh2Fleet']['shotResults'] = True
     if any(kind == b'I' for _, kind, _ in extras):
         meta['oh2Fleet']['incomingFeedback'] = True
     for _, kind, args in extras:
@@ -409,7 +424,8 @@ def make(track, seed_path, destination):
             meta['oh2Fleet']['battleHistory'] = True
             meta['oh2Fleet']['battleLogSettings'] = args[2]
             break
-    loadout = [[max(0., stamp-origin)] + args for stamp, kind, args in extras if kind == b'U']
+    loadout = [[max(0., stamp-origin)] + args for stamp, kind, args in extras
+               if kind == b'U' and not (args[0] == 'driverState' and args[1] in (32, 128))]
     if loadout:
         meta['oh2Fleet']['loadout'] = sorted(loadout, key=lambda row: row[0])
     outlines = [[max(0., stamp-origin), slots.get(args[0], 0)]

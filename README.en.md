@@ -37,6 +37,10 @@ By default, the mod records only vehicles visible to the player. To record all v
 ### What gets recorded
 
 - The countdown once the vehicle is ready, and the remaining battle time.
+- Seconds remaining in the prebattle message. Standard allied and enemy overhead markers show tank tiers by default.
+- Recorded player shot results drive the client's own penetration, non-penetration and ricochet audio. Older replays use a generic hit confirmation for recorded non-lethal shell damage to an enemy.
+- Hull auto-rotation, cruise control, player vehicle fires, and kill and critical hit feedback.
+- The winner or draw and finish reason when OffHangar resolves a battle. The native client uses the result to select the ending music. Leaving early produces no result.
 - Current hit points and the health bar on the lower-left vehicle panel.
 - Module damage and destruction, automatic repair progress, repairs and crew injuries and recovery on the same panel. Per-module states are saved in battles recorded with this feature installed.
 - Vehicle movement and orientation, turret and gun movement, shots, hits, vehicle destruction, the player's camera and sniper view.

@@ -138,6 +138,15 @@ def install_aim_settings():
     @wraps(original)
     def settings(replay, key, default=None):
         base = original(replay, key, default)
+        if key in ('ally', 'enemy') and replay.isPlaying and getattr(replay, '_BattleReplay__fileName', None):
+            try:
+                is_fleet = (replay.arenaInfo or {}).get('oh2Fleet')
+            except (TypeError, ValueError):
+                is_fleet = False
+            if is_fleet:
+                marker = dict(base or {})
+                marker.setdefault('markerBaseLevel', True)
+                return marker
         if key not in ('arcade', 'sniper') or not replay.isPlaying:
             return base
         filename = getattr(replay, '_BattleReplay__fileName', None)
@@ -173,10 +182,26 @@ def install_aim_settings():
     BattleReplay.BattleReplay.getSetting = settings
 
 
+def install_countdown():
+    from gui.Scaleform.daapi.view.battle.shared.prebattle_timers.timer_base import PreBattleTimerBase
+    from gui.battle_control.battle_constants import COUNTDOWN_STATE
+    original = PreBattleTimerBase.setCountdown
+    @wraps(original)
+    def countdown(view, state, timeLeft):
+        result = original(view, state, timeLeft)
+        replay = BattleReplay.g_replayCtrl
+        if (state == COUNTDOWN_STATE.START and timeLeft is not None and timeLeft >= 0
+                and replay.isPlaying and (replay.arenaInfo or {}).get('oh2Fleet')):
+            view.as_setMessageS(u'%s\n%d' % (view._getMessage(), int(timeLeft)))
+        return result
+    PreBattleTimerBase.setCountdown = countdown
+
+
 def init():
     global session
     from PlayerEvents import g_playerEvents
     install_aim_settings()
+    install_countdown()
     g_playerEvents.onObservedByEnemy += observed
     BattleReplay.g_replayCtrl.setDataCallback(CALLBACK, play_warning)
     live = plugins._ASAutoReloadProxy.setReloading
