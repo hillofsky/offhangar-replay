@@ -1,0 +1,69 @@
+# OffHangar Replay
+
+[한국어](README.md) · **English**
+
+Record offline battles in **World of Tanks EU 2.3.1.2 (Windows x64)** with **OffHangar 2.0 LAN**. The mod saves each battle as a `.wotreplay` that opens in the game's built-in replay player. Install the same client and mod on the playback PC to see the battle log, radio commands, consumables and other recorded HUD details.
+
+## Installation
+
+1. Download `offhangar-replay-2.3.1.2-win64.zip` from the [latest release](https://github.com/hillofsky/offhangar-replay/releases/latest) and extract it into its own folder.
+2. Close the game. The ZIP includes the initialization data for EU 2.3.1.2.
+3. Open PowerShell in the extracted folder and run the command below. Replace the example path with the root folder of your OffHangar game installation.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -GameDir "D:\Games\World_of_Tanks"
+```
+
+A fresh installation uses the bundled `bootstrap.dat`. An update reuses the installed template. To supply your own, add `-Replay "D:\Replays\my-native-battle.wotreplay"` to the command. This option accepts a compatible replay recorded by the original client on the same build.
+
+## Recording and playback
+
+Choose a replay recording mode in the game settings before starting an offline battle. After the battle ends, open the finished replay from the game's `replays` folder.
+
+| In-game setting | Files saved |
+| --- | --- |
+| Off | No new recording. |
+| Last | Each completed battle replaces `OffHangar-last.wotreplay`. |
+| All | Each battle gets a separate, timestamped `OffHangar-*.wotreplay`. |
+
+By default, the mod records only vehicles visible to the player. To record all vehicles, press **Ctrl + Alt + F9** in the Garage or open `mods\offhangar-fleet\FleetReplaySettings.exe`. The change applies to the next battle. The in-game setting above controls how many replay files you keep.
+
+### What gets recorded
+
+- Vehicle movement and orientation, turret and gun movement, shots, hits, vehicle destruction, the player's camera and sniper view.
+- Aiming circle, reload state, Sixth Sense, radio commands and the outline of the vehicle under the reticle.
+- Rounds remaining by shell type, rounds in the magazine, current and next shell selections, consumable quantities and cooldowns.
+- The lower-left battle log and its totals. The original HUD shows damage dealt, assisted, blocked and received, as well as damage to modules and crew.
+
+## Compatibility and troubleshooting
+
+- The supported base mod is `mods\2.3.1.2\offhangar2_lan_2312.wotmod`. Install the game and OffHangar 2.0 LAN first.
+- Older replays can show damage when both the HP change and the attacker were recorded. Accurate ammunition, consumable and assisted-damage history requires a recording that captured those events.
+- One short Prokhorovka test replay containing only allied vehicles caused the client to exit during loading. The cause is unknown.
+- A `.ohtrack` file is the recording before conversion. If conversion fails after a battle, look in `replays\offhangar` for a file ending in `.export-error.txt`.
+- Replays and privately supplied templates can contain player names and battle identifiers. When reporting an issue, start with the client version, map, recording mode and replay timestamp.
+
+## Build from source
+
+You need Windows x64, 64-bit Python 3.12, the supported game client and the .NET Framework 4.x C# compiler. The build compiles in-game Python modules with the client's `win64\python27.dll`.
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe .\tools\build.py "D:\Games\World_of_Tanks"
+```
+
+The `build` folder contains the Windows release ZIP and `SHA256SUMS.txt`. The ZIP includes six mod packages, the converter, the recording-scope utility, the replay template, the installer and third-party notices.
+
+| Path | Contents |
+| --- | --- |
+| `src/mod_oh2_*.py` | In-game recording and playback modules |
+| `src/fleet_export.py`, `src/replay_sample.py` | Recording conversion and native replay container handling |
+| `src/FleetReplaySettings.cs` | Recording-scope utility |
+| `tools/` | Windows release build scripts |
+| `templates/bootstrap.dat` | Bundled replay initialization data |
+| `Install.ps1` | Template validation and installation |
+
+## Uninstall
+
+Close the game. In `mods\2.3.1.2`, remove `oh2-fleet.wotmod`, `oh2-fleet-animation.wotmod`, `oh2-fleet-hud.wotmod`, `oh2-fleet-radio.wotmod`, `oh2-fleet-status.wotmod` and `oh2-replay-compat.wotmod`. The converter and its settings are in `mods\offhangar-fleet`. Saved battles are in `replays`.
