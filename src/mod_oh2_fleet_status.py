@@ -15,6 +15,7 @@ from constants import ATTACK_REASON, ATTACK_REASON_INDICES, VEHICLE_SETTING
 from gui.mods import mod_oh2_fleet as fleet
 from gui.Scaleform.daapi.view.battle.shared.crosshair import plugins
 from gui.battle_control.battle_constants import VEHICLE_VIEW_STATE
+from gui.battle_control.controllers.vehicle_state_ctrl import VehicleStateController
 
 LOG = logging.getLogger('oh2.fleet.status')
 EVENTS = (BATTLE_EVENT_TYPE.RECEIVED_DAMAGE, BATTLE_EVENT_TYPE.TANKING, BATTLE_EVENT_TYPE.RECEIVED_CRIT,
@@ -147,16 +148,28 @@ class Loadout(object):
         self.previous = None
         self.timer = None
         self.errors = set()
+        self.shown_devices = set()
 
     def snapshot(self, end):
         # Keep first appearance order for slots, then restore shell selection.
         items, choices = OrderedDict(), OrderedDict()
+        devices, repairs = OrderedDict(), OrderedDict()
         for row in self.rows[:end]:
             if row[1] == 'ammo':
                 items[row[2], row[8]] = row
             elif row[1] == 'selection':
                 choices[row[2]] = row
-        return list(items.values()) + list(choices.values())
+            elif row[1] == 'device':
+                name, actual = row[2], row[4]
+                devices[name] = [row[0], 'device', name, actual, actual]
+                if actual != 'destroyed':
+                    repairs.pop(name, None)
+            elif row[1] == 'repair':
+                repairs[row[2]] = row
+        # Rewinding before a hit must clear the icon from the later timeline.
+        for name in sorted(self.shown_devices.difference(devices)):
+            devices[name] = [0., 'device', name, 'normal', 'normal']
+        return list(items.values()) + list(choices.values()) + list(devices.values()) + list(repairs.values())
 
     def apply(self, p, row, now):
         if row[1] == 'ammo':
@@ -166,6 +179,21 @@ class Loadout(object):
             p.updateVehicleAmmo(p.playerVehicleID, cd, count, stage, prev, remaining, total, index)
         elif row[1] == 'selection' and row[2] in SELECTION:
             p.updateVehicleSetting(p.playerVehicleID, row[2], row[3])
+        elif row[1] == 'device':
+            name, display, actual = row[2:]
+            p.guiSessionProvider.invalidateVehicleState(
+                VEHICLE_VIEW_STATE.DEVICES, (name, display, actual), p.playerVehicleID)
+            if actual == 'normal':
+                self.shown_devices.discard(name)
+            else:
+                self.shown_devices.add(name)
+        elif row[1] == 'repair':
+            stamp, _, name, progress, seconds, mode = row
+            elapsed = max(0., now-stamp)
+            if seconds > elapsed:
+                progress += (1.-progress) * elapsed / seconds
+                p.guiSessionProvider.invalidateVehicleState(
+                    VEHICLE_VIEW_STATE.REPAIRING, (name, progress, seconds-elapsed, mode), p.playerVehicleID)
 
     def tick(self):
         self.timer = None
@@ -205,6 +233,7 @@ def init():
     @wraps(new_track)
     def begin(track, *args, **kwargs):
         new_track(track, *args, **kwargs)
+        track.device_states = {}
         from helpers import dependency
         from skeletons.account_helpers.settings_core import ISettingsCore
         settings = {}
@@ -215,6 +244,25 @@ def init():
             LOG.warning('Could not read damage log settings', exc_info=True)
         track.write(b'I', fleet._json_bytes([0., 'start', 'history', settings]))
     fleet.Track.__init__ = begin
+    notify = VehicleStateController.notifyStateChanged
+    @wraps(notify)
+    def state_changed(ctrl, stateID, value):
+        result = notify(ctrl, stateID, value)
+        track = fleet._track
+        if track is not None and stateID in (VEHICLE_VIEW_STATE.DEVICES, VEHICLE_VIEW_STATE.REPAIRING):
+            try:
+                if ctrl.getControllingVehicleID() == BigWorld.player().playerVehicleID:
+                    if stateID == VEHICLE_VIEW_STATE.REPAIRING:
+                        record(b'U', ['repair'] + list(value))
+                    elif track.device_states.get(value[0]) != tuple(value):
+                        record(b'U', ['device'] + list(value))
+                        track.device_states[value[0]] = tuple(value)
+            except Exception:
+                if 'devices' not in track.errors:
+                    track.errors.add('devices')
+                    LOG.exception('Recording player vehicle damage panel')
+        return result
+    VehicleStateController.notifyStateChanged = state_changed
     original_setting = BattleReplay.BattleReplay.getSetting
     @wraps(original_setting)
     def replay_setting(controller, key, default=None):
