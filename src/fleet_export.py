@@ -257,17 +257,52 @@ def append_radio(packets, extras, slots, origin):
         packets.append((0x31,max(0.,stamp-origin),U32.pack(len(name))+name+U32.pack(len(payload))+payload))
 
 
+def append_periods(packets, extras, frames, origin, avatar):
+    phases = [(stamp-origin, *args) for stamp, kind, args in extras if kind == b'P']
+    if not phases and extras:
+        # Early tracks without phase events still need BATTLE for sniper controls.
+        phases = [(0., 3, 900., 900.)]
+    if not phases:
+        return
+    clock = next((struct.unpack('<d', b)[0] for k, _, b in packets if k == 0x15), 0.)
+    # The bootstrap belongs to a different battle. Replace its clock messages.
+    packets[:] = [(k, t, b) for k, t, b in packets if k not in (0x16, 0x17)
+                  and not (k == 8 and b.startswith(struct.pack('<II', avatar, 59)) and b[12:13] == b'\x03')]
+    timeline = []
+    for stamp, period, length, remaining in phases:
+        deadline = stamp + remaining
+        # The first sample follows the actual transition by up to one sampling interval.
+        start = max(0., deadline-length) if period in (2, 3) and 0 <= remaining <= length else max(0., stamp)
+        if timeline:
+            start = max(timeline[-1][0], start)
+        timeline.append((start, period, length, deadline))
+    finish = max(frames[-1][0], max((stamp for stamp, _, _ in extras), default=origin)) - origin
+    for i, (start, period, length, deadline) in enumerate(timeline):
+        stop = timeline[i+1][0] if i+1 < len(timeline) else finish
+        # Old recorders kept the 45-second loading guard and missed the real countdown.
+        if period == 2 and length == 45. and i+1 < len(timeline) and timeline[i+1][1] == 3:
+            if abs(deadline-stop) > .25:
+                deadline, length = stop, stop-start
+        info = zlib.compress(pickle.dumps((period, clock+deadline, length, ()), protocol=2))
+        packets.append((8, start, message(avatar, 59, b'\x03'+bw_string(info))))
+        packets.append((0x16, start, U32.pack(period)))
+        # The native replay HUD reads arenaLength, which the live HUD records on each tick.
+        tick = start
+        while True:
+            remaining = max(0., deadline-tick)
+            packets.append((0x17, tick, struct.pack('<f', remaining)))
+            tick += 1.
+            if period not in (2, 3) or remaining == 0 or tick >= stop:
+                break
+
+
 def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
     from bisect import bisect_left
     own = [(t,p[1:4]) for t,frame in frames for p in frame if p[0] == own_key]
     stamps = [t for t,p in own]
     last_mode = None
     last_zoom = None
-    clock = next((struct.unpack('<d',b)[0] for k,t,b in packets if k==0x15),0.)
-    if extras and not any(k==b'P' for _,k,_ in extras):
-        # Early v2 tracks sampled effects without the arena phase. Playback must
-        # reach BATTLE to enable sniper controls. The original cutoff is unknown.
-        extras = [(origin,b'P',[3,900.,900.])] + extras
+    append_periods(packets, extras, frames, origin, avatar)
     normal_fov = next((a[3] for _,k,a in extras if k==b'C' and a[0]=='arcade'), 0.93266)
     append_radio(packets,extras,slots,origin)
     for stamp, kind, args in extras:
@@ -289,12 +324,6 @@ def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
             name = b'oh2Fleet.spotted'
             payload = pickle.dumps(tuple(args), protocol=2)
             packets.append((0x31, t, U32.pack(len(name))+name+U32.pack(len(payload))+payload))
-        elif kind == b'P':
-            period,length,remaining = args
-            info = zlib.compress(pickle.dumps((period,clock+t+remaining,length,()),protocol=2))
-            packets.append((8,t,message(avatar,59,b'\x03'+bw_string(info))))
-            packets.append((0x16,t,U32.pack(period)))
-            packets.append((0x17,t,struct.pack('<f',remaining)))
         elif kind == b'A':
             for key,angle in args:
                 if key in slots:
@@ -540,7 +569,14 @@ def prepare_seed(source, destination):
     os.replace(temporary, destination)
 
 
-if __name__ == '__main__' and sys.argv[1:2] == ['--prepare-seed']:
+if __name__ == '__main__' and sys.argv[1:2] == ['--rebuild']:
+    if len(sys.argv) != 4:
+        raise SystemExit(2)
+    track, destination = map(Path, sys.argv[2:])
+    if destination.suffix.lower() != '.wotreplay' or destination.exists():
+        raise SystemExit('Choose a new .wotreplay filename.')
+    make(track, Path(sys.executable).parent / 'bootstrap.dat', destination)
+elif __name__ == '__main__' and sys.argv[1:2] == ['--prepare-seed']:
     if len(sys.argv) != 4:
         raise SystemExit(2)
     destination = Path(sys.argv[3])

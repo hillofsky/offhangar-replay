@@ -36,12 +36,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -GameDir "D:\G
 
 ### 기록되는 전투 정보
 
+- 차량 로딩 후 실제로 시작된 카운트다운과 전투 제한 시간
 - 전차 이동과 방향, 포탑·포신 회전, 발사·피격·격파, 플레이어 카메라와 저격 시점
 - 조준원·장전 상태, 육감, 무전 명령, 조준한 전차의 윤곽선
 - 탄종별 잔탄과 탄창, 현재·다음 탄종, 소모품 수량과 재사용 대기시간
 - 왼쪽 하단 전투 기록과 누적 합계. 가한 피해, 도움 피해, 막은 피해, 받은 피해와 부품·승무원 피해를 원래 HUD로 표시합니다.
 
 ## 호환성과 문제 확인
+
+- 기존 리플레이의 카운트다운이 어긋나고 원본 `.ohtrack`이 남아 있다면 업데이트 후 새 파일로 변환할 수 있습니다. 게임 폴더에서 아래 명령의 입력 이름을 실제 전투 기록으로 바꾸고, 출력에는 새 이름을 지정하세요. 이전 기록에 카운트다운 변경 시각이 빠진 경우 변환기는 기록된 전투 시작 시각을 사용합니다.
+
+```powershell
+.\mods\offhangar-fleet\export.exe --rebuild ".\replays\offhangar\BATTLE.ohtrack" ".\replays\countdown-fixed.wotreplay"
+```
 
 - 지원 대상으로 확인한 기반 모드는 `mods\2.3.1.2\offhangar2_lan_2312.wotmod`입니다. 설치하려는 PC에 해당 모드와 게임이 먼저 있어야 합니다.
 - 변환에 실패하면 `replays\offhangar`에서 이름이 `.export-error.txt`로 끝나는 파일을 열어 원인을 확인하세요.

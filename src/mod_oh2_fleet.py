@@ -208,7 +208,7 @@ class Track(object):
                 LOG.exception('Recording player target outline')
 
     def sample(self):
-        from gui.mods.offhangar2 import bots, turret
+        from gui.mods.offhangar2 import battle, bots, turret
         from gun_rotation_shared import encodeGunAngles
         player = BigWorld.player()
         arena = getattr(player, 'arena', None)
@@ -264,10 +264,16 @@ class Track(object):
             self.write(b'F', struct.pack('<f', now - self.start) + b''.join(rows))
             self.frames += 1
             self.record_outline(player, now)
-            if arena.period != self.period and arena.period in (1,2,3,4):
-                self.period = arena.period
-                self.write(b'P', _json_bytes([now-self.start, self.period, arena.periodLength,
-                                              max(0., arena.periodEndTime - BigWorld.serverTime())]))
+            period = arena.period
+            length, end = arena.periodLength, arena.periodEndTime
+            # OffHangar uses PREBATTLE twice. Its first deadline only guards vehicle loading.
+            if period == 2 and getattr(battle, '_countdownState', {}).get('armed') is False:
+                period, length, end = 1, 0., 0.
+            timing = (period, length, end)
+            if period in (1, 2, 3, 4) and timing != self.period:
+                self.period = timing
+                self.write(b'P', _json_bytes([now-self.start, period, length,
+                                              max(0., end - BigWorld.serverTime())]))
             if angles:
                 self.write(b'A', struct.pack('<f', now-self.start) + b''.join(angles))
             try:

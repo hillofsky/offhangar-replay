@@ -36,12 +36,19 @@ By default, the mod records only vehicles visible to the player. To record all v
 
 ### What gets recorded
 
+- The countdown once the vehicle is ready, and the remaining battle time.
 - Vehicle movement and orientation, turret and gun movement, shots, hits, vehicle destruction, the player's camera and sniper view.
 - Aiming circle, reload state, Sixth Sense, radio commands and the outline of the vehicle under the reticle.
 - Rounds remaining by shell type, rounds in the magazine, current and next shell selections, consumable quantities and cooldowns.
 - The lower-left battle log and its totals. The original HUD shows damage dealt, assisted, blocked and received, as well as damage to modules and crew.
 
 ## Compatibility and troubleshooting
+
+- To correct the countdown in an older replay, update the mod and rebuild from the original `.ohtrack`. Run this command in the game folder with your track filename and a new output filename. If the older track missed the countdown reset, the converter uses the recorded battle start time.
+
+```powershell
+.\mods\offhangar-fleet\export.exe --rebuild ".\replays\offhangar\BATTLE.ohtrack" ".\replays\countdown-fixed.wotreplay"
+```
 
 - The supported base mod is `mods\2.3.1.2\offhangar2_lan_2312.wotmod`. Install the game and OffHangar 2.0 LAN first.
 - If conversion fails, open the file ending in `.export-error.txt` in `replays\offhangar` for details.
