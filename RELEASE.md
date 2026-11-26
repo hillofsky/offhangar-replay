@@ -1,6 +1,10 @@
-# OffHangar Replay v1.0.9 · EU 2.3.1.2
+# OffHangar Replay v1.0.10 · EU 2.3.1.2
 
 오프라인 전투를 `.wotreplay`로 저장하고 월드 오브 탱크 기본 재생기에서 플레이어 시점과 전투 HUD를 다시 볼 수 있습니다.
+
+v1.0.10에서는 리플레이에서 직진할 때 차체가 앞뒤로 튀는 현상과 선회할 때 차체 각도가 끊겨 보이는 현상을 줄였습니다. 일반 시점에서 카메라를 고정하고 달릴 때의 미세한 흔들림도 줄였습니다. 새 전투에는 자동으로 적용됩니다. 기존 전투는 원본 `.ohtrack`을 다시 변환하면 적용됩니다.
+
+Version 1.0.10 reduces jitter during straight driving and abrupt changes in hull rotation during turns. It also steadies the arcade camera when driving with the view held still. New battles use the improvement automatically. To apply it to an older battle, rebuild its original `.ohtrack`.
 
 - 준비 문구에 카운트다운 초를 표시하고 일반 아군·적군 마커에 전차 티어를 표시합니다.
 - 중앙 전투 리본, 미니맵 아군 위치와 시야 밖에서 격파된 뒤 발견된 잔해의 생존표 반영을 지원합니다.

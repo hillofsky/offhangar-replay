@@ -49,6 +49,7 @@ By default, the mod records only vehicles visible to the player. To record all v
 - Current hit points and the health bar on the lower-left vehicle panel.
 - Module damage and destruction, automatic repair progress, repairs and crew injuries and recovery on the same panel. Per-module states are saved in battles recorded with this feature installed.
 - Vehicle movement and orientation, turret and gun movement, shots, hits, vehicle destruction, the player's camera and sniper view.
+- The converter uses adjacent position and orientation samples to smooth straight driving and hull rotation. It also reduces small camera movements when driving with the arcade view held still.
 - Aiming circle, reload state, Sixth Sense, radio commands and the outline of the vehicle under the reticle.
 - Rounds remaining by shell type, rounds in the magazine, current and next shell selections, consumable quantities and cooldowns.
 - The lower-left battle log and its totals. The original HUD shows damage dealt, assisted, blocked and received, as well as damage to modules and crew.
@@ -58,10 +59,10 @@ By default, the mod records only vehicles visible to the player. To record all v
 
 ## Compatibility and troubleshooting
 
-- To correct the countdown in an older replay, update the mod and rebuild from the original `.ohtrack`. Run this command in the game folder with your track filename and a new output filename. If the older track missed the countdown reset, the converter uses the recorded battle start time.
+- To apply movement smoothing or correct the countdown in an older replay, update the mod and rebuild from the original `.ohtrack`. Run this command in the game folder with your track filename and a new output filename. If the older track missed the countdown reset, the converter uses the recorded battle start time.
 
 ```powershell
-.\mods\offhangar-fleet\export.exe --rebuild ".\replays\offhangar\BATTLE.ohtrack" ".\replays\countdown-fixed.wotreplay"
+.\mods\offhangar-fleet\export.exe --rebuild ".\replays\offhangar\BATTLE.ohtrack" ".\replays\BATTLE-rebuilt.wotreplay"
 ```
 
 - The supported base mod is `mods\2.3.1.2\offhangar2_lan_2312.wotmod`. Install the game and OffHangar 2.0 LAN first.

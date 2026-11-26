@@ -331,10 +331,38 @@ def append_periods(packets, extras, frames, origin, avatar):
                 break
 
 
-def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
+def camera_offsets(extras, own):
     from bisect import bisect_left
+    stamps = [t for t, _ in own]
+    cameras = []
+    for stamp, kind, args in extras:
+        if kind != b'C':
+            continue
+        i = min(bisect_left(stamps, stamp), len(stamps)-1)
+        if i and abs(stamps[i-1]-stamp) < abs(stamps[i]-stamp):
+            i -= 1
+        offset = tuple(v-base for v,base in zip(args[1], own[i][1]))
+        cameras.append((stamp, args, offset, i))
+    for i, (stamp, args, offset, base) in enumerate(cameras):
+        # The arcade camera and hull can be a render frame apart even while
+        # the view is fixed. Filter small relative translations only in motion.
+        if args[0] == 'arcade' and 0 < i < len(cameras)-1:
+            left, right = cameras[i-1], cameras[i+1]
+            before, after = stamp-left[0], right[0]-stamp
+            if (0 < before <= .25 and 0 < after <= .25 and
+                all(other[1][0] == 'arcade' and abs(other[1][3]-args[3]) < .001
+                   and math.dist(other[1][2][2], args[2][2]) < .01
+                   and math.dist(other[2], offset) < .45
+                   and .01 < math.dist(own[other[3]][1], own[base][1]) <= 40 * abs(other[0]-stamp)
+                   for other in (left, right))):
+                fraction = before / (before+after)
+                offset = tuple(.5*(v+a+(b-a)*fraction) for v,a,b in zip(offset, left[2], right[2]))
+        yield offset
+
+
+def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
     own = [(t,p[1:4]) for t,frame in frames for p in frame if p[0] == own_key]
-    stamps = [t for t,p in own]
+    offsets = camera_offsets(extras, own)
     last_mode = None
     last_zoom = None
     append_periods(packets, extras, frames, origin, avatar)
@@ -425,10 +453,7 @@ def append_extra(packets, extras, slots, frames, origin, own_key, avatar):
                 callback = pickle.dumps((zoom,), protocol=2)
                 packets.append((0x31,t,U32.pack(9)+b'applyZoom'+U32.pack(len(callback))+callback))
                 last_zoom = zoom
-            i=min(bisect_left(stamps,stamp),len(stamps)-1)
-            if i and abs(stamps[i-1]-stamp)<abs(stamps[i]-stamp):
-                i-=1
-            offset=[v-base for v,base in zip(position,own[i][1])]
+            offset = next(offsets)
             packets.append((0x26,t,struct.pack('<10f',*quaternion(axes),*offset,fov,0,near)))
 
 
@@ -459,6 +484,50 @@ def battlefield_updates(roster, frames, extras, own):
             updates.append((stamp, b'M', positions))
             next_map = stamp + 1.
     return updates
+
+
+def playback_poses(frames):
+    """Reduce sample-to-sample velocity jitter before the native movement filter."""
+    previous = {}
+    for index, (stamp, frame) in enumerate(frames):
+        following = frames[index + 1] if index + 1 < len(frames) else (stamp, ())
+        before = stamp - frames[index - 1][0] if index else 0.
+        after = following[0] - stamp
+        corrected = []
+        if 0 < before <= .25 and 0 < after <= .25:
+            upcoming = {p[0]: p for p in following[1]}
+            fraction = before / (before + after)
+            for pose in frame:
+                left, right = previous.get(pose[0]), upcoming.get(pose[0])
+                if left and right and min(left[7], pose[7], right[7]) > 0:
+                    pose = smooth_pose(left, pose, right, before, after, fraction)
+                corrected.append(pose)
+        else:
+            corrected = frame
+        yield stamp, corrected
+        previous = {p[0]: p for p in frame}
+
+
+def smooth_pose(left, pose, right, before, after, fraction):
+    back = tuple(a-b for a,b in zip(pose[1:4], left[1:4]))
+    ahead = tuple(a-b for a,b in zip(right[1:4], pose[1:4]))
+    if math.hypot(*back) > 40 * before or math.hypot(*ahead) > 40 * after:
+        return pose
+    xyz = pose[1:4]
+    # Only round a continuous drive. Keep stops, reversals and abrupt impacts.
+    if sum(a*b for a,b in zip(back, ahead)) > 0:
+        shift = tuple(.5 * (fraction*b - (1-fraction)*a) for a,b in zip(back, ahead))
+        if math.hypot(*shift) <= .2:
+            xyz = tuple(value+d for value,d in zip(xyz, shift))
+    angles = []
+    for a,b,c in zip(left[4:7], pose[4:7], right[4:7]):
+        incoming = math.remainder(b-a, math.tau)
+        outgoing = math.remainder(c-b, math.tau)
+        change = .5 * (fraction*outgoing - (1-fraction)*incoming)
+        if incoming*outgoing >= 0 and abs(change) <= .02:
+            b = math.remainder(b+change, math.tau)
+        angles.append(b)
+    return (pose[0], *xyz, *angles, pose[7])
 
 
 def make(track, seed_path, destination):
@@ -607,7 +676,7 @@ def make(track, seed_path, destination):
     if has_destruction:
         area = next((b for k,t,b in reference if k == 5 and b[4] == 7), generic)
         append_destructibles(packets, extras, area, origin)
-    for t, frame in frames:
+    for t, frame in playback_poses(frames):
         if player_view:
             present = {pose[0] for pose in frame}
             for key in sorted(spawned - present):
